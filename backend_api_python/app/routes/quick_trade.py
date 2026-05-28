@@ -1345,6 +1345,40 @@ def _parse_balance(raw: Any, exchange_id: str, market_type: str) -> Dict[str, An
     return result
 
 
+def _fetch_spot_holdings_raw(client: Any, *, symbol: str) -> Dict[str, Any]:
+    """
+    Spot "position" = base-asset wallet balance for the trading pair.
+
+    Returns the same ``{"data": [row, ...]}`` envelope as derivative position APIs.
+    """
+    from app.services.live_trading.spot_sizing import get_spot_base_holding
+    from app.services.live_trading.symbols import _split_base_quote
+
+    sym = str(symbol or "").strip()
+    base, quote = _split_base_quote(sym)
+    if not base:
+        return {"data": []}
+    display = sym if sym else f"{base}/{quote or 'USDT'}"
+    holding = get_spot_base_holding(client, symbol=display)
+    total = float(holding.get("total") or 0.0)
+    avail = float(holding.get("available") or 0.0)
+    if total <= 0 and avail <= 0:
+        return {"data": []}
+    qty = total if total > 0 else avail
+    if avail <= 0:
+        avail = qty
+    return {
+        "data": [
+            {
+                "symbol": display,
+                "bal": qty,
+                "availBal": avail,
+                "side": "long",
+            }
+        ]
+    }
+
+
 def _fetch_exchange_positions_raw(
     client: Any,
     exchange_config: Dict[str, Any],
@@ -1359,12 +1393,14 @@ def _fetch_exchange_positions_raw(
     or need extra args (Bitget ``product_type``, OKX ``inst_type``). Centralize here.
     """
     from app.services.live_trading.binance import BinanceFuturesClient
+    from app.services.live_trading.binance_spot import BinanceSpotClient
     from app.services.live_trading.bitget import BitgetMixClient
+    from app.services.live_trading.bitget_spot import BitgetSpotClient
     from app.services.live_trading.bybit import BybitClient
     from app.services.live_trading.deepcoin import DeepcoinClient
     from app.services.live_trading.gate import GateSpotClient, GateUsdtFuturesClient
     from app.services.live_trading.htx import HtxClient
-    from app.services.live_trading.kucoin import KucoinFuturesClient
+    from app.services.live_trading.kucoin import KucoinFuturesClient, KucoinSpotClient
     from app.services.live_trading.okx import OkxClient
     from app.services.live_trading.symbols import (
         to_bybit_symbol,
@@ -1376,14 +1412,14 @@ def _fetch_exchange_positions_raw(
 
     mt = (market_type or "swap").strip().lower()
 
+    if mt == "spot" and isinstance(
+        client, (BinanceSpotClient, BitgetSpotClient, KucoinSpotClient, OkxClient)
+    ):
+        return _fetch_spot_holdings_raw(client, symbol=symbol)
+
     if isinstance(client, OkxClient):
-        if mt == "spot":
-            inst_id = to_okx_spot_inst_id(symbol)
-            inst_type = "SPOT"
-        else:
-            inst_id = to_okx_swap_inst_id(symbol)
-            inst_type = "SWAP"
-        raw = client.get_positions(inst_id=inst_id, inst_type=inst_type)
+        inst_id = to_okx_swap_inst_id(symbol)
+        raw = client.get_positions(inst_id=inst_id, inst_type="SWAP")
         return _normalize_okx_positions_raw(raw)
 
     if isinstance(client, BinanceFuturesClient):
@@ -1531,6 +1567,9 @@ def _fetch_exchange_positions_raw(
     if hasattr(client, "get_position"):
         return client.get_position(symbol=symbol)
 
+    if mt == "spot":
+        return _fetch_spot_holdings_raw(client, symbol=symbol)
+
     return None
 
 
@@ -1619,6 +1658,8 @@ def _extract_signed_position_qty(item: dict) -> float:
     for key in (
         "pos", "positionAmt", "posAmt", "size", "currentQty", "volume",
         "contracts", "total", "current_qty", "availPos",
+        "bal", "balance", "walletBalance", "equity", "cashBal", "qty",
+        "availBal", "free", "available",
     ):
         try:
             v = float(item.get(key) or 0)

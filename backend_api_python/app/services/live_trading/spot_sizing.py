@@ -59,14 +59,27 @@ def _pick_free_from_row(row: Dict[str, Any], *keys: str) -> float:
     return 0.0
 
 
-def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
+def _spot_holding(total: float, available: float) -> Dict[str, float]:
+    t = max(0.0, float(total or 0.0))
+    a = max(0.0, float(available or 0.0))
+    if t <= 0 and a <= 0:
+        return {"total": 0.0, "available": 0.0}
+    if t <= 0:
+        t = a
+    if a <= 0:
+        a = t
+    return {"total": t, "available": a}
+
+
+def get_spot_base_holding(client: BaseRestClient, *, symbol: str) -> Dict[str, float]:
     """
-    Best-effort free/available base asset on the connected spot account.
-    Returns 0.0 if unknown or on error.
+    Best-effort spot base-asset holding (total + available/free).
+
+    Used by Quick Trade spot position display and close sizing.
     """
     base, _ = _split_base_quote(str(symbol or ""))
     if not base:
-        return 0.0
+        return {"total": 0.0, "available": 0.0}
     base_u = base.upper()
 
     try:
@@ -78,9 +91,11 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                 if not isinstance(b, dict):
                     continue
                 if str(b.get("asset") or "").upper() == base_u:
-                    return _pick_free_from_row(b, "free")
+                    free = _pick_free_from_row(b, "free")
+                    locked = _pick_free_from_row(b, "locked")
+                    return _spot_holding(free + locked, free)
     except Exception as e:
-        logger.warning("spot free balance (binance): %s", e)
+        logger.warning("spot base holding (binance): %s", e)
 
     try:
         from app.services.live_trading.okx import OkxClient
@@ -94,9 +109,14 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                     if not isinstance(det, dict):
                         continue
                     if str(det.get("ccy") or "").upper() == base_u:
-                        return _pick_free_from_row(det, "availBal", "cashBal", "eq")
+                        avail = _pick_free_from_row(det, "availBal", "cashBal")
+                        total = _pick_free_from_row(det, "eq", "cashBal", "availBal")
+                        frozen = _pick_free_from_row(det, "frozenBal")
+                        if total <= 0:
+                            total = avail + frozen
+                        return _spot_holding(total, avail)
     except Exception as e:
-        logger.warning("spot free balance (okx): %s", e)
+        logger.warning("spot base holding (okx): %s", e)
 
     try:
         from app.services.live_trading.gate import GateSpotClient
@@ -110,9 +130,11 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                 if not isinstance(row, dict):
                     continue
                 if str(row.get("currency") or "").upper() == base_u:
-                    return _pick_free_from_row(row, "available", "available_balance")
+                    avail = _pick_free_from_row(row, "available", "available_balance")
+                    locked = _pick_free_from_row(row, "locked", "freeze")
+                    return _spot_holding(avail + locked, avail)
     except Exception as e:
-        logger.warning("spot free balance (gate): %s", e)
+        logger.warning("spot base holding (gate): %s", e)
 
     try:
         from app.services.live_trading.bitget_spot import BitgetSpotClient
@@ -124,9 +146,14 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                 if not isinstance(row, dict):
                     continue
                 if str(row.get("coin") or row.get("currency") or "").upper() == base_u:
-                    return _pick_free_from_row(row, "available", "avail", "free")
+                    avail = _pick_free_from_row(row, "available", "avail", "free")
+                    frozen = _pick_free_from_row(row, "frozen", "lock")
+                    total = _pick_free_from_row(row, "total", "balance")
+                    if total <= 0:
+                        total = avail + frozen
+                    return _spot_holding(total, avail)
     except Exception as e:
-        logger.warning("spot free balance (bitget): %s", e)
+        logger.warning("spot base holding (bitget): %s", e)
 
     try:
         from app.services.live_trading.bybit import BybitClient
@@ -141,11 +168,13 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                     if not isinstance(coin, dict):
                         continue
                     if str(coin.get("coin") or "").upper() == base_u:
-                        return _pick_free_from_row(
-                            coin, "availableToWithdraw", "walletBalance", "equity", "free"
+                        avail = _pick_free_from_row(
+                            coin, "availableToWithdraw", "free", "walletBalance"
                         )
+                        total = _pick_free_from_row(coin, "walletBalance", "equity", "availableToWithdraw")
+                        return _spot_holding(total, avail)
     except Exception as e:
-        logger.warning("spot free balance (bybit): %s", e)
+        logger.warning("spot base holding (bybit): %s", e)
 
     try:
         from app.services.live_trading.kucoin import KucoinSpotClient
@@ -160,9 +189,11 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                     continue
                 if str(row.get("type") or "").lower() not in ("", "trade", "main"):
                     continue
-                return _pick_free_from_row(row, "available", "balance", "holds")
+                avail = _pick_free_from_row(row, "available", "balance", "holds")
+                total = _pick_free_from_row(row, "balance", "available", "holds")
+                return _spot_holding(total, avail)
     except Exception as e:
-        logger.warning("spot free balance (kucoin): %s", e)
+        logger.warning("spot base holding (kucoin): %s", e)
 
     try:
         from app.services.live_trading.htx import HtxClient
@@ -174,9 +205,11 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                 if not isinstance(item, dict):
                     continue
                 if str(item.get("currency") or "").upper() == base_u:
-                    return _pick_free_from_row(item, "available", "balance")
+                    total = _pick_free_from_row(item, "balance")
+                    avail = _pick_free_from_row(item, "available", "balance")
+                    return _spot_holding(total, avail)
     except Exception as e:
-        logger.warning("spot free balance (htx): %s", e)
+        logger.warning("spot base holding (htx): %s", e)
 
     try:
         from app.services.live_trading.kraken import KrakenClient
@@ -188,13 +221,24 @@ def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
                 for key, val in result.items():
                     if base_u in str(key).upper():
                         try:
-                            return float(val or 0.0)
+                            qty = float(val or 0.0)
                         except Exception:
-                            pass
+                            qty = 0.0
+                        if qty > 0:
+                            return _spot_holding(qty, qty)
     except Exception as e:
-        logger.warning("spot free balance (kraken): %s", e)
+        logger.warning("spot base holding (kraken): %s", e)
 
-    return 0.0
+    return {"total": 0.0, "available": 0.0}
+
+
+def get_spot_free_base_balance(client: BaseRestClient, *, symbol: str) -> float:
+    """
+    Best-effort free/available base asset on the connected spot account.
+    Returns 0.0 if unknown or on error.
+    """
+    holding = get_spot_base_holding(client, symbol=symbol)
+    return max(0.0, float(holding.get("available") or 0.0))
 
 
 def fetch_spot_last_price(client: BaseRestClient, *, symbol: str) -> float:

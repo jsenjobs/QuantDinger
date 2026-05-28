@@ -1305,6 +1305,8 @@ class TradingExecutor:
             trade_direction = trading_config.get('trade_direction', 'long')
             if market_type == 'spot':
                 trade_direction = 'long'  # 现货只能做多
+                if isinstance(trading_config, dict):
+                    trading_config['trade_direction'] = 'long'
                 logger.info(f"Strategy {strategy_id} spot trading; force trade_direction=long")
 
             # 获取市场类别（Crypto, USStock, Forex, Futures）

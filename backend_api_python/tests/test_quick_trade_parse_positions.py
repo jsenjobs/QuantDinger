@@ -1,5 +1,7 @@
 """Tests for Quick Trade position side parsing (long vs short display)."""
 
+from unittest.mock import MagicMock, patch
+
 from app.routes.quick_trade import _infer_position_side_from_row, _parse_positions
 
 
@@ -113,3 +115,47 @@ def test_parse_positions_bybit_list_wrapper():
     out = _parse_positions(raw)
     assert len(out) == 1
     assert out[0]["side"] == "short"
+
+
+def test_parse_positions_spot_bal_row():
+    """Spot wallet rows use bal/availBal instead of pos/positionAmt."""
+    raw = {
+        "data": [
+            {
+                "symbol": "APT/USDT",
+                "bal": 120.5,
+                "availBal": 118.0,
+            }
+        ]
+    }
+    out = _parse_positions(raw)
+    assert len(out) == 1
+    assert out[0]["side"] == "long"
+    assert out[0]["size"] == 120.5
+
+
+def test_fetch_spot_holdings_raw_empty():
+    from app.routes.quick_trade import _fetch_spot_holdings_raw
+
+    client = MagicMock()
+    with patch(
+        "app.services.live_trading.spot_sizing.get_spot_base_holding",
+        return_value={"total": 0.0, "available": 0.0},
+    ):
+        raw = _fetch_spot_holdings_raw(client, symbol="APT/USDT")
+    assert raw == {"data": []}
+
+
+def test_fetch_spot_holdings_raw_with_balance():
+    from app.routes.quick_trade import _fetch_spot_holdings_raw
+
+    client = MagicMock()
+    with patch(
+        "app.services.live_trading.spot_sizing.get_spot_base_holding",
+        return_value={"total": 50.0, "available": 48.5},
+    ):
+        raw = _fetch_spot_holdings_raw(client, symbol="APT/USDT")
+    out = _parse_positions(raw)
+    assert len(out) == 1
+    assert out[0]["symbol"] == "APT/USDT"
+    assert out[0]["size"] == 50.0
