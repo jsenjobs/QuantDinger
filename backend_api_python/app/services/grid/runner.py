@@ -161,7 +161,13 @@ class GridRestingRunner:
 
         self._engine.handle_boundary(current_price)
 
-        if self._engine.cfg.initial_position_pct > 0 and not getattr(self, "_initial_exits_done", False):
+        if (
+            self._engine.cfg.initial_position_pct > 0
+            and not self._engine._initial_done
+        ):
+            self._engine.run_initial_market_position(current_price)
+
+        if self._engine._initial_done and self._engine.cfg.initial_position_pct > 0 and not getattr(self, "_initial_exits_done", False):
             n = self._engine.sync_initial_exit_orders(current_price)
             if n > 0:
                 self._initial_exits_done = True

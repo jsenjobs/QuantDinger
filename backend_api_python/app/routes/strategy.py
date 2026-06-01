@@ -59,6 +59,8 @@ def _normalize_trade_row_for_api(trade: dict, *, leverage: float = 1.0, market_t
         out["margin_value"] = calc_margin_notional(value, leverage, market_type)
         profit = out.get("profit")
         if profit is not None:
+            commission = float(out.get("commission") or 0.0)
+            out["net_pnl"] = round(float(profit) - commission, 8)
             margin = float(out.get("margin_value") or 0.0)
             if margin > 0:
                 out["profit_pct_on_margin"] = round(float(profit) / margin * 100.0, 4)
@@ -869,7 +871,11 @@ def get_positions():
             rows = cur.fetchall() or []
             cur.close()
 
-        if not rows:
+        # Live strategies: empty qd_strategy_positions means the exchange is flat
+        # (position sync deletes local rows). Do NOT replay trades here — that
+        # recreates "ghost" long/short rows and flickers on every refresh.
+        execution_mode = str(st.get("execution_mode") or "signal").strip().lower()
+        if not rows and execution_mode != "live":
             try:
                 from app.services.live_trading.records import rebuild_positions_from_trades
 
@@ -921,8 +927,10 @@ def get_positions():
             for r in rows:
                 sym = (r.get("symbol") or "").strip()
                 side = (r.get("side") or "").strip().lower()
-                entry = float(r.get("entry_price") or 0.0)
                 size = float(r.get("size") or 0.0)
+                if size <= 1e-12:
+                    continue
+                entry = float(r.get("entry_price") or 0.0)
                 cp = float(sym_to_price.get(sym) or r.get("current_price") or 0.0)
                 pnl = calc_unrealized_pnl(side, entry, cp, size)
                 pct = calc_pnl_percent(entry, size, pnl, leverage=leverage, market_type=market_type)
@@ -956,9 +964,105 @@ def get_positions():
             db.commit()
             cur.close()
 
-        return jsonify({'code': 1, 'msg': 'success', 'data': {'positions': out, 'items': out}})
+        account_legs: list = []
+        reconciliation_status = {"status": "skipped", "notes": []}
+        if execution_mode == "live":
+            try:
+                from app.services.live_trading.account_positions import (
+                    list_account_positions_for_strategy,
+                    reconcile_strategy_vs_account,
+                )
+                from app.services.live_trading.records import strategy_allowed_symbols
+
+                allowed = strategy_allowed_symbols(
+                    {
+                        "symbol": st.get("symbol"),
+                        "trading_config": trading_config,
+                    }
+                )
+                account_legs = list_account_positions_for_strategy(
+                    strategy_id=int(strategy_id),
+                    user_id=int(user_id),
+                    allowed_symbols=allowed,
+                )
+                reconciliation_status = reconcile_strategy_vs_account(out, account_legs)
+            except Exception as e:
+                logger.warning(
+                    "account reconciliation failed for strategy %s: %s", strategy_id, e
+                )
+
+        return jsonify({
+            'code': 1,
+            'msg': 'success',
+            'data': {
+                'positions': out,
+                'items': out,
+                'account_legs': account_legs,
+                'reconciliation_status': reconciliation_status,
+            },
+        })
     except Exception as e:
         logger.error(f"get_positions failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'code': 0, 'msg': str(e), 'data': {'positions': [], 'items': []}}), 500
+
+
+@strategy_blp.route('/account/snapshot', methods=['GET'])
+@login_required
+def get_account_snapshot():
+    """Live swap/spot positions + open orders for a saved credential."""
+    try:
+        user_id = g.user_id
+        credential_id = request.args.get('credential_id', type=int)
+        if not credential_id:
+            return jsonify({
+                'code': 0,
+                'msg': 'Missing credential_id',
+                'data': {'swap_positions': [], 'spot_positions': [], 'open_orders': []},
+            }), 400
+
+        from app.services.live_trading.account_snapshot import fetch_account_snapshot
+
+        snap = fetch_account_snapshot(user_id=int(user_id), credential_id=int(credential_id))
+        msg = "success"
+        if snap.get("error"):
+            msg = str(snap.get("error") or "")
+        elif snap.get("warnings"):
+            msg = str(snap["warnings"][0])
+        return jsonify({'code': 1, 'msg': msg, 'data': snap})
+    except Exception as e:
+        logger.error(f"get_account_snapshot failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'code': 0,
+            'msg': str(e),
+            'data': {'swap_positions': [], 'spot_positions': [], 'open_orders': []},
+        }), 500
+
+
+@strategy_blp.route('/account/positions', methods=['GET'])
+@login_required
+def get_account_positions():
+    """L1 account position mirror for Quick Trade / asset views."""
+    try:
+        user_id = g.user_id
+        credential_id = request.args.get('credential_id', type=int)
+        market_type = request.args.get('market_type', type=str)
+
+        from app.services.live_trading.account_positions import list_account_positions
+
+        rows = list_account_positions(
+            user_id=int(user_id),
+            credential_id=credential_id,
+            market_type=market_type,
+        )
+        return jsonify({
+            'code': 1,
+            'msg': 'success',
+            'data': {'positions': rows, 'items': rows},
+        })
+    except Exception as e:
+        logger.error(f"get_account_positions failed: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'code': 0, 'msg': str(e), 'data': {'positions': [], 'items': []}}), 500
 
@@ -983,6 +1087,15 @@ def get_grid_resting_orders():
 
         status = request.args.get('status', '')
         limit = request.args.get('limit', default=200, type=int)
+        sync = request.args.get('sync', '').lower() in ('1', 'true', 'yes')
+
+        if sync:
+            try:
+                from app.services.grid.poller import sync_strategy_grid_orders
+
+                sync_strategy_grid_orders(int(strategy_id))
+            except Exception as sync_err:
+                logger.debug("grid-resting sync sid=%s: %s", strategy_id, sync_err)
 
         from app.services.grid.resting_orders_repo import GridRestingOrderRepository
 
@@ -1014,6 +1127,56 @@ def get_grid_resting_orders():
         logger.error("get_grid_resting_orders failed: %s", e)
         logger.error(traceback.format_exc())
         return jsonify({'code': 0, 'msg': str(e), 'data': {'orders': [], 'items': []}}), 500
+
+
+def _trade_row_timestamp(row: dict) -> int:
+    created_at = row.get("created_at")
+    if created_at and hasattr(created_at, "timestamp"):
+        dt = created_at
+        if getattr(dt, "tzinfo", None) is None:
+            from datetime import timezone as _tz
+            dt = dt.replace(tzinfo=_tz.utc)
+        return int(dt.timestamp())
+    if created_at:
+        try:
+            return int(created_at)
+        except Exception:
+            pass
+    return int(time.time())
+
+
+def _strategy_performance_summary(initial: float, curve: list) -> dict:
+    """Unified KPI math for strategy detail header + performance tab."""
+    init = float(initial or 0.0)
+    if init <= 0:
+        init = 1000.0
+    latest = float(curve[-1].get("equity") or init) if curve else init
+    total_return = latest - init
+    total_return_pct = (total_return / init * 100.0) if init > 0 else 0.0
+
+    peak = init
+    max_drawdown = 0.0
+    max_drawdown_pct = 0.0
+    for pt in curve or []:
+        eq = float(pt.get("equity") or 0.0)
+        if eq > peak:
+            peak = eq
+        dd = peak - eq
+        if dd > max_drawdown:
+            max_drawdown = dd
+        if peak > 0:
+            dd_pct = dd / peak * 100.0
+            if dd_pct > max_drawdown_pct:
+                max_drawdown_pct = dd_pct
+
+    return {
+        "initial_equity": round(init, 2),
+        "latest_equity": round(latest, 2),
+        "total_return": round(total_return, 2),
+        "total_return_pct": round(total_return_pct, 2),
+        "max_drawdown": round(max_drawdown, 2),
+        "max_drawdown_pct": round(max_drawdown_pct, 2),
+    }
 
 
 def _build_strategy_equity_curve(user_id: int, strategy_id: int):
@@ -1050,20 +1213,16 @@ def _build_strategy_equity_curve(user_id: int, strategy_id: int):
 
     equity = initial
     curve = []
+    if rows:
+        anchor_ts = _trade_row_timestamp(rows[0])
+        curve.append({"time": anchor_ts, "equity": round(initial, 2)})
     for r in rows:
         try:
             # Net equity step: gross trade P&L minus exchange-synced fee.
             equity += float(r.get('profit') or 0) - float(r.get('commission') or 0)
         except Exception:
             pass
-        created_at = r.get('created_at')
-        if created_at and hasattr(created_at, 'timestamp'):
-            ts = int(created_at.timestamp())
-        elif created_at:
-            ts = int(created_at)
-        else:
-            ts = int(time.time())
-        curve.append({'time': ts, 'equity': round(equity, 2)})
+        curve.append({'time': _trade_row_timestamp(r), 'equity': round(equity, 2)})
 
     try:
         unreal = float(prow.get('u') or prow.get('U') or 0)
@@ -2085,16 +2244,20 @@ def get_strategy_performance():
         if error:
             return jsonify({'code': 0, 'msg': error, 'data': None}), 404
 
-        latest_equity = float(equity_data[-1].get('equity') or 0) if equity_data else 0.0
-        first_equity = float(equity_data[0].get('equity') or 0) if equity_data else latest_equity
-        total_return = latest_equity - first_equity
+        st = get_strategy_service().get_strategy(strategy_id, user_id=user_id) or {}
+        initial = float(st.get('initial_capital') or (st.get('trading_config') or {}).get('initial_capital') or 0)
+        summary = _strategy_performance_summary(initial, equity_data)
         return jsonify({
             'code': 1,
             'msg': 'success',
             'data': {
                 'equity_curve': equity_data,
-                'latest_equity': round(latest_equity, 2),
-                'total_return': round(total_return, 2),
+                'latest_equity': summary['latest_equity'],
+                'initial_equity': summary['initial_equity'],
+                'total_return': summary['total_return'],
+                'total_return_pct': summary['total_return_pct'],
+                'max_drawdown': summary['max_drawdown'],
+                'max_drawdown_pct': summary['max_drawdown_pct'],
                 'points': len(equity_data),
             }
         })

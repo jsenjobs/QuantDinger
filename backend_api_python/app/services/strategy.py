@@ -1071,6 +1071,7 @@ class StrategyService:
                 init_cap = float(r.get('initial_capital') or 0.0)
                 current_equity = max(0.0, init_cap + m['realized_pnl'] + m['unrealized_pnl'])
                 total_pnl = m['realized_pnl'] + m['unrealized_pnl']
+                total_pnl_pct = round(total_pnl / init_cap * 100.0, 2) if init_cap > 0 else 0.0
                 out.append({
                     **r,
                     'exchange_config': ex,
@@ -1082,6 +1083,7 @@ class StrategyService:
                     'realized_pnl': m['realized_pnl'],
                     'unrealized_pnl': m['unrealized_pnl'],
                     'total_pnl': total_pnl,
+                    'total_pnl_pct': total_pnl_pct,
                     'current_equity': current_equity,
                 })
             return out
@@ -1116,6 +1118,7 @@ class StrategyService:
                 r['realized_pnl'] = rp
                 r['unrealized_pnl'] = up
                 r['total_pnl'] = rp + up
+                r['total_pnl_pct'] = round((rp + up) / init_cap * 100.0, 2) if init_cap > 0 else 0.0
                 r['current_equity'] = max(0.0, init_cap + rp + up)
             except Exception:
                 pass

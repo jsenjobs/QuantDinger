@@ -34,3 +34,11 @@ def test_lookup_exchange_side_qty_symbol_aliases():
     exch = {"SOL/USDT": {"long": 1.5, "short": 0.0}}
     assert lookup_exchange_side_qty(exch, "SOLUSDT", "long") == 1.5
     assert lookup_exchange_side_qty(exch, "SOL/USDT", "short") == 0.0
+
+
+def test_strategy_has_trades_for_symbol_candidates():
+    from app.services.live_trading.records import _position_symbol_candidates
+
+    cands = _position_symbol_candidates("ETHUSDT")
+    assert "ETH/USDT" in cands
+    assert "ETHUSDT" in cands

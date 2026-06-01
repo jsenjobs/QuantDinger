@@ -8,9 +8,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.services.grid.config import GridBotConfig
 from app.services.grid.exchange_orders import (
     cancel_grid_order,
+    execute_grid_market_order,
     make_grid_client_order_id,
     place_grid_limit_order,
 )
+from app.services.grid.fill_handler import record_grid_market_fill
 from app.services.grid.levels import GridCellSpec, generate_cells, generate_levels
 from app.services.grid.resting_orders_repo import GridRestingOrder, GridRestingOrderRepository
 from app.services.grid.runtime_state import load_grid_resting_state, persist_grid_resting_state
@@ -130,10 +132,101 @@ class GridEngine:
         )
         return True, ""
 
+    def _has_initial_market_trade(self) -> bool:
+        """True when a verified grid initial market fill was recorded in L2."""
+        try:
+            from app.utils.db import get_db_connection
+
+            with get_db_connection() as db:
+                cur = db.cursor()
+                cur.execute(
+                    """
+                    SELECT 1 FROM qd_strategy_trades
+                    WHERE strategy_id = %s
+                      AND close_reason IN ('grid_initial_long', 'grid_initial_short')
+                    LIMIT 1
+                    """,
+                    (int(self.strategy_id),),
+                )
+                row = cur.fetchone()
+                cur.close()
+                return bool(row)
+        except Exception as e:
+            logger.debug("grid initial trade check sid=%s: %s", self.strategy_id, e)
+            return False
+
+    def _leg_position_qty(self, pos_side: str) -> float:
+        try:
+            from app.services.live_trading.position_query import query_exchange_position_size
+
+            client = self._create_client()
+            return float(
+                query_exchange_position_size(
+                    client=client,
+                    symbol=self.symbol,
+                    pos_side=str(pos_side or ""),
+                    market_type=str(self.cfg.market_type or "swap"),
+                    exchange_config=self.exchange_config if isinstance(self.exchange_config, dict) else {},
+                )
+                or 0.0
+            )
+        except Exception as e:
+            logger.debug("grid leg position qty sid=%s %s: %s", self.strategy_id, pos_side, e)
+            return 0.0
+
+    def _sync_initial_market_leg(self, signal_type: str, usdt: float, price: float, reason: str) -> bool:
+        lev = self.cfg.leverage if self.cfg.market_type != "spot" else 1.0
+        qty = float(usdt or 0) * lev / float(price) if price > 0 else 0.0
+        if qty <= 0:
+            return False
+        try:
+            client = self._create_client()
+            ok, filled, avg = execute_grid_market_order(
+                client,
+                symbol=self.symbol,
+                signal_type=signal_type,
+                quantity=qty,
+                market_type=self.cfg.market_type,
+                exchange_config=self.exchange_config,
+                leverage=self.cfg.leverage,
+            )
+        except Exception as e:
+            logger.warning("grid initial market sid=%s %s: %s", self.strategy_id, signal_type, e)
+            append_strategy_log(self.strategy_id, "error", f"Grid initial market failed {signal_type}: {e}")
+            return False
+        if not ok or filled <= 0:
+            append_strategy_log(
+                self.strategy_id,
+                "warning",
+                f"Grid initial market {signal_type} not filled (qty={qty:.6f} @ {price:.4f})",
+            )
+            return False
+        record_grid_market_fill(
+            self.strategy_id,
+            self.symbol,
+            signal_type,
+            filled,
+            avg,
+            self.trading_config,
+            reason=reason,
+        )
+        append_strategy_log(
+            self.strategy_id,
+            "info",
+            f"Grid initial market {signal_type}: filled {filled:.6f} @ {avg:.4f}",
+        )
+        return True
+
     def run_initial_market_position(self, current_price: float) -> bool:
-        if self._initial_done or self.cfg.initial_position_pct <= 0:
+        if self.cfg.initial_position_pct <= 0:
             self._initial_done = True
             return True
+        if self._initial_done:
+            if self._has_initial_market_trade():
+                return True
+            # Stale flag from enqueue-only era — retry initial market.
+            self._initial_done = False
+            persist_grid_resting_state(self.strategy_id, {"initial_market_done": False})
         init_cap = self._initial_capital_usdt()
         usdt = init_cap * self.cfg.initial_position_pct
         if usdt <= 0:
@@ -142,13 +235,11 @@ class GridEngine:
             return True
         direction = self.cfg.grid_direction
         if direction == "short":
-            sig = "open_short"
-            reason = "grid_initial_short"
+            ok = self._sync_initial_market_leg("open_short", usdt, current_price, "grid_initial_short")
         elif direction == "neutral":
-            # Neutral grid: split initial budget across both legs (best-effort).
             half = usdt / 2.0
-            ok_long = self._enqueue_market("open_long", half, current_price, "grid_initial_long")
-            ok_short = self._enqueue_market("open_short", half, current_price, "grid_initial_short")
+            ok_long = self._sync_initial_market_leg("open_long", half, current_price, "grid_initial_long")
+            ok_short = self._sync_initial_market_leg("open_short", half, current_price, "grid_initial_short")
             ok = ok_long or ok_short
             if ok:
                 append_strategy_log(
@@ -156,20 +247,9 @@ class GridEngine:
                     "info",
                     f"Grid initial neutral market: {usdt:.2f} USDT split @ {current_price:.4f}",
                 )
-            if ok:
-                self._initial_done = True
-                persist_grid_resting_state(self.strategy_id, {"initial_market_done": True})
-            return ok
         else:
-            sig = "open_long"
-            reason = "grid_initial_long"
-        ok = self._enqueue_market(sig, usdt, current_price, reason)
+            ok = self._sync_initial_market_leg("open_long", usdt, current_price, "grid_initial_long")
         if ok:
-            append_strategy_log(
-                self.strategy_id,
-                "info",
-                f"Grid initial market {sig}: {usdt:.2f} USDT @ {current_price:.4f}",
-            )
             self._initial_done = True
             persist_grid_resting_state(self.strategy_id, {"initial_market_done": True})
         return ok
@@ -195,18 +275,13 @@ class GridEngine:
 
     def sync_initial_exit_orders(self, current_price: float) -> int:
         """After initial market position, hang one take-profit limit on the active cell."""
-        if self.cfg.initial_position_pct <= 0 or current_price <= 0:
+        if not self._initial_done or self.cfg.initial_position_pct <= 0 or current_price <= 0:
             return 0
         direction = self.cfg.grid_direction
         if direction == "neutral":
             return 0
         _, cells = self._levels_and_cells()
         if not cells:
-            return 0
-        init_cap = self._initial_capital_usdt()
-        usdt = init_cap * self.cfg.initial_position_pct
-        qty = self._qty_from_usdt(usdt, current_price)
-        if qty <= 0:
             return 0
 
         target_cell: Optional[GridCellSpec] = None
@@ -217,6 +292,9 @@ class GridEngine:
 
         placed = 0
         if direction == "long":
+            qty = self._leg_position_qty("long")
+            if qty <= 0:
+                return 0
             if target_cell is None:
                 for cell in reversed(cells):
                     if cell.lower_price < current_price:
@@ -236,6 +314,9 @@ class GridEngine:
                 ):
                     placed += 1
         elif direction == "short":
+            qty = self._leg_position_qty("short")
+            if qty <= 0:
+                return 0
             if target_cell is None:
                 for cell in cells:
                     if cell.upper_price > current_price:

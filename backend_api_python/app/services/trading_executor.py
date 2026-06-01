@@ -192,6 +192,12 @@ class TradingExecutor:
                 cursor.close()
         except Exception as e:
             logger.error(f"Failed to check/ensure DB columns: {str(e)}")
+        try:
+            from app.services.live_trading.records import ensure_position_ledger_schema
+
+            ensure_position_ledger_schema()
+        except Exception as e:
+            logger.warning("ensure_position_ledger_schema failed: %s", e)
 
     def _normalize_trade_symbol(self, exchange: Any, symbol: str, market_type: str, exchange_id: str) -> str:
         """
@@ -2228,7 +2234,8 @@ class TradingExecutor:
                                                         strategy_id, p['symbol'], p['side'],
                                                         float(p['size']), float(p['entry_price']),
                                                         current_close,
-                                                        highest_price=new_hp
+                                                        highest_price=new_hp,
+                                                        execution_mode=execution_mode,
                                                     )
                                             try:
                                                 bar_ts = int(
@@ -2423,7 +2430,8 @@ class TradingExecutor:
                                                 strategy_id, p['symbol'], p['side'],
                                                 float(p['size']), float(p['entry_price']),
                                                 current_price,
-                                                highest_price=new_hp
+                                                highest_price=new_hp,
+                                                execution_mode=execution_mode,
                                             )
                             except Exception as e:
                                 logger.warning(f"Strategy {strategy_id} realtime indicator recompute failed: {str(e)}")
@@ -2501,6 +2509,7 @@ class TradingExecutor:
                         leverage=float(leverage),
                         trading_config=trading_config,
                         timeframe_seconds=int(timeframe_seconds or 60),
+                        execution_mode=execution_mode,
                     )
                     if risk_tp:
                         triggered_signals.append(risk_tp)
@@ -3122,52 +3131,45 @@ class TradingExecutor:
             if not current_positions:
                 return None
 
-            pos = current_positions[0]
-            side = pos.get('side')
-            if side not in ['long', 'short']:
-                return None
-
-            entry_price = float(pos.get('entry_price', 0) or 0)
-            if entry_price <= 0 or current_price <= 0:
-                return None
-
-            # Stop-loss: prefer @strategy ratios (same as backtest), else flat percent fields.
             sl = float(self._risk_params_from_trading_config(trading_config).get("stop_loss_ratio") or 0)
             if sl <= 0:
                 return None
 
-            # SL is the underlying's % price move; leverage only affects PnL
-            # magnitude / liquidation, NOT the trigger threshold.
-
-            # Use candle start timestamp to deduplicate exit attempts within a candle.
             now_ts = int(time.time())
             tf = int(timeframe_seconds or 60)
             candle_ts = int(now_ts // tf) * tf
 
-            # 多头：跌破止损线
-            if side == 'long':
-                stop_line = entry_price * (1 - sl)
-                if current_price <= stop_line:
-                    return {
-                        'type': 'close_long',
-                        'trigger_price': 0,  # 立即触发（由 exit_trigger_mode 控制）
-                        'position_size': 0,
-                        'timestamp': candle_ts,
-                        'reason': 'server_stop_loss',
-                        'stop_loss_price': stop_line,
-                    }
-            # 空头：突破止损线
-            elif side == 'short':
-                stop_line = entry_price * (1 + sl)
-                if current_price >= stop_line:
-                    return {
-                        'type': 'close_short',
-                        'trigger_price': 0,
-                        'position_size': 0,
-                        'timestamp': candle_ts,
-                        'reason': 'server_stop_loss',
-                        'stop_loss_price': stop_line,
-                    }
+            for pos in current_positions:
+                side = (pos.get('side') or '').strip().lower()
+                if side not in ('long', 'short'):
+                    continue
+
+                entry_price = float(pos.get('entry_price', 0) or 0)
+                if entry_price <= 0 or current_price <= 0:
+                    continue
+
+                if side == 'long':
+                    stop_line = entry_price * (1 - sl)
+                    if current_price <= stop_line:
+                        return {
+                            'type': 'close_long',
+                            'trigger_price': 0,
+                            'position_size': 0,
+                            'timestamp': candle_ts,
+                            'reason': 'server_stop_loss',
+                            'stop_loss_price': stop_line,
+                        }
+                else:
+                    stop_line = entry_price * (1 + sl)
+                    if current_price >= stop_line:
+                        return {
+                            'type': 'close_short',
+                            'trigger_price': 0,
+                            'position_size': 0,
+                            'timestamp': candle_ts,
+                            'reason': 'server_stop_loss',
+                            'stop_loss_price': stop_line,
+                        }
 
             return None
         except Exception as e:
@@ -3183,6 +3185,7 @@ class TradingExecutor:
         leverage: float,
         trading_config: Dict[str, Any],
         timeframe_seconds: int,
+        execution_mode: str = "signal",
     ) -> Optional[Dict[str, Any]]:
         """
         Server-side exits driven by trading_config / @strategy code annotations:
@@ -3210,15 +3213,6 @@ class TradingExecutor:
             if not current_positions:
                 return None
 
-            pos = current_positions[0]
-            side = (pos.get('side') or '').strip().lower()
-            if side not in ['long', 'short']:
-                return None
-
-            entry_price = float(pos.get('entry_price', 0) or 0)
-            if entry_price <= 0 or current_price <= 0:
-                return None
-
             # TP / trailing are the underlying's % price move; leverage does not
             # affect trigger thresholds (only PnL magnitude / liquidation).
             risk_params = self._risk_params_from_trading_config(trading_config)
@@ -3234,7 +3228,6 @@ class TradingExecutor:
             # Conflict rule: when trailing is enabled, fixed TP is disabled.
             if trailing_enabled and trailing_pct_eff > 0:
                 tp_eff = 0.0
-                # If activationPct is missing, reuse take_profit_pct as activation threshold.
                 if trailing_act_eff <= 0 and tp > 0:
                     trailing_act_eff = tp
 
@@ -3242,98 +3235,104 @@ class TradingExecutor:
             tf = int(timeframe_seconds or 60)
             candle_ts = int(now_ts // tf) * tf
 
-            # Highest/lowest tracking (persisted in DB so restart continues trailing correctly)
-            try:
-                hp = float(pos.get('highest_price') or 0.0)
-            except Exception:
-                hp = 0.0
-            try:
-                lp = float(pos.get('lowest_price') or 0.0)
-            except Exception:
-                lp = 0.0
+            for pos in current_positions:
+                side = (pos.get('side') or '').strip().lower()
+                if side not in ('long', 'short'):
+                    continue
 
-            if hp <= 0:
-                hp = entry_price
-            hp = max(hp, float(current_price))
+                entry_price = float(pos.get('entry_price', 0) or 0)
+                if entry_price <= 0 or current_price <= 0:
+                    continue
 
-            if lp <= 0:
-                lp = entry_price
-            lp = min(lp, float(current_price))
+                try:
+                    hp = float(pos.get('highest_price') or 0.0)
+                except Exception:
+                    hp = 0.0
+                try:
+                    lp = float(pos.get('lowest_price') or 0.0)
+                except Exception:
+                    lp = 0.0
 
-            # Persist best-effort
-            try:
-                self._update_position(
-                    strategy_id=strategy_id,
-                    symbol=pos.get('symbol') or symbol,
-                    side=side,
-                    size=float(pos.get('size') or 0.0),
-                    entry_price=entry_price,
-                    current_price=float(current_price),
-                    highest_price=hp,
-                    lowest_price=lp,
-                )
-            except Exception:
-                pass
+                if hp <= 0:
+                    hp = entry_price
+                hp = max(hp, float(current_price))
 
-            # 1) Trailing stop
-            if trailing_enabled and trailing_pct_eff > 0:
-                if side == 'long':
-                    active = True
-                    if trailing_act_eff > 0:
-                        active = hp >= entry_price * (1 + trailing_act_eff)
-                    if active:
-                        stop_line = hp * (1 - trailing_pct_eff)
-                        if current_price <= stop_line:
+                if lp <= 0:
+                    lp = entry_price
+                lp = min(lp, float(current_price))
+
+                try:
+                    self._update_position(
+                        strategy_id=strategy_id,
+                        symbol=pos.get('symbol') or symbol,
+                        side=side,
+                        size=float(pos.get('size') or 0.0),
+                        entry_price=entry_price,
+                        current_price=float(current_price),
+                        highest_price=hp,
+                        lowest_price=lp,
+                        execution_mode=execution_mode,
+                    )
+                except Exception:
+                    pass
+
+                if trailing_enabled and trailing_pct_eff > 0:
+                    if side == 'long':
+                        active = True
+                        if trailing_act_eff > 0:
+                            active = hp >= entry_price * (1 + trailing_act_eff)
+                        if active:
+                            stop_line = hp * (1 - trailing_pct_eff)
+                            if current_price <= stop_line:
+                                return {
+                                    'type': 'close_long',
+                                    'trigger_price': 0,
+                                    'position_size': 0,
+                                    'timestamp': candle_ts,
+                                    'reason': 'server_trailing_stop',
+                                    'trailing_stop_price': stop_line,
+                                    'highest_price': hp,
+                                }
+                    else:
+                        active = True
+                        if trailing_act_eff > 0:
+                            active = lp <= entry_price * (1 - trailing_act_eff)
+                        if active:
+                            stop_line = lp * (1 + trailing_pct_eff)
+                            if current_price >= stop_line:
+                                return {
+                                    'type': 'close_short',
+                                    'trigger_price': 0,
+                                    'position_size': 0,
+                                    'timestamp': candle_ts,
+                                    'reason': 'server_trailing_stop',
+                                    'trailing_stop_price': stop_line,
+                                    'lowest_price': lp,
+                                }
+
+                if tp_eff > 0:
+                    if side == 'long':
+                        tp_line = entry_price * (1 + tp_eff)
+                        if current_price >= tp_line:
                             return {
                                 'type': 'close_long',
                                 'trigger_price': 0,
                                 'position_size': 0,
                                 'timestamp': candle_ts,
-                                'reason': 'server_trailing_stop',
-                                'trailing_stop_price': stop_line,
-                                'highest_price': hp,
+                                'reason': 'server_take_profit',
+                                'take_profit_price': tp_line,
                             }
-                else:
-                    active = True
-                    if trailing_act_eff > 0:
-                        active = lp <= entry_price * (1 - trailing_act_eff)
-                    if active:
-                        stop_line = lp * (1 + trailing_pct_eff)
-                        if current_price >= stop_line:
+                    else:
+                        tp_line = entry_price * (1 - tp_eff)
+                        if current_price <= tp_line:
                             return {
                                 'type': 'close_short',
                                 'trigger_price': 0,
                                 'position_size': 0,
                                 'timestamp': candle_ts,
-                                'reason': 'server_trailing_stop',
-                                'trailing_stop_price': stop_line,
-                                'lowest_price': lp,
+                                'reason': 'server_take_profit',
+                                'take_profit_price': tp_line,
                             }
-
-            # 2) Fixed take-profit (only when trailing is disabled)
-            if tp_eff > 0:
-                if side == 'long':
-                    tp_line = entry_price * (1 + tp_eff)
-                    if current_price >= tp_line:
-                        return {
-                            'type': 'close_long',
-                            'trigger_price': 0,
-                            'position_size': 0,
-                            'timestamp': candle_ts,
-                            'reason': 'server_take_profit',
-                            'take_profit_price': tp_line,
-                        }
-                else:
-                    tp_line = entry_price * (1 - tp_eff)
-                    if current_price <= tp_line:
-                        return {
-                            'type': 'close_short',
-                            'trigger_price': 0,
-                            'position_size': 0,
-                            'timestamp': candle_ts,
-                            'reason': 'server_take_profit',
-                            'take_profit_price': tp_line,
-                        }
 
             return None
         except Exception:
@@ -5076,37 +5075,29 @@ class TradingExecutor:
         matched_entry_price: Optional[float] = None,
         grid_matched_profit: Optional[float] = None,
     ):
-        """记录交易到数据库"""
+        """记录交易到数据库（signal 模拟模式）"""
         try:
-            user_id = 1
-            with get_db_connection() as db:
-                cursor = db.cursor()
-                try:
-                    cursor.execute("SELECT user_id FROM qd_strategies_trading WHERE id = %s", (strategy_id,))
-                    row = cursor.fetchone()
-                    user_id = int((row or {}).get('user_id') or 1)
-                except Exception:
-                    pass
-                query = """
-                    INSERT INTO qd_strategy_trades (
-                        user_id, strategy_id, symbol, type, price, amount, value,
-                        commission, profit, close_reason,
-                        matched_entry_price, grid_matched_profit, created_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
-                    )
-                """
-                cursor.execute(
-                    query,
-                    (
-                        user_id, strategy_id, symbol, type, price, amount, value,
-                        commission or 0, profit, str(close_reason or "").strip(),
-                        float(matched_entry_price) if matched_entry_price is not None else 0.0,
-                        float(grid_matched_profit) if grid_matched_profit is not None else 0.0,
-                    ),
-                )
-                db.commit()
-                cursor.close()
+            from app.services.live_trading.leg_context import resolve_leg_context
+            from app.services.live_trading.records import record_trade
+
+            leg = resolve_leg_context(
+                strategy_id=int(strategy_id),
+                symbol=str(symbol or ""),
+                fill_source="signal_sim",
+            )
+            record_trade(
+                strategy_id=int(strategy_id),
+                symbol=str(symbol or ""),
+                trade_type=str(type or ""),
+                price=float(price or 0.0),
+                amount=float(amount or 0.0),
+                commission=float(commission or 0.0),
+                profit=profit,
+                close_reason=str(close_reason or ""),
+                matched_entry_price=matched_entry_price,
+                grid_matched_profit=grid_matched_profit,
+                leg=leg,
+            )
         except Exception as e:
             logger.error(f"Failed to record trade: {e}")
 
@@ -5120,8 +5111,27 @@ class TradingExecutor:
         current_price: float,
         highest_price: float = 0.0,
         lowest_price: float = 0.0,
+        execution_mode: str = "signal",
     ):
         """更新持仓状态"""
+        mode = str(execution_mode or "signal").strip().lower()
+        if mode == "live":
+            # Live size/entry is owned by PendingOrderWorker + position sync.
+            # Only patch trailing markers on rows that still exist.
+            try:
+                from app.services.live_trading.records import patch_position_markers
+
+                patch_position_markers(
+                    strategy_id=int(strategy_id),
+                    symbol=str(symbol or ""),
+                    side=str(side or ""),
+                    current_price=float(current_price or 0.0),
+                    highest_price=float(highest_price or 0.0),
+                    lowest_price=float(lowest_price or 0.0),
+                )
+            except Exception as e:
+                logger.warning("patch_position_markers failed sid=%s: %s", strategy_id, e)
+            return
         try:
             # Get user_id from strategy
             user_id = 1
