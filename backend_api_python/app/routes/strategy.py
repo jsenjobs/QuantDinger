@@ -1020,10 +1020,15 @@ def get_positions():
             cur.close()
 
         account_legs: list = []
+        swap_account_legs: list = []
+        spot_account_legs: list = []
+        account_snapshot_fetched_at = 0
         reconciliation_status = {"status": "skipped", "notes": []}
         if execution_mode == "live":
             try:
                 from app.services.live_trading.account_positions import (
+                    filter_legs_by_symbols,
+                    live_account_mirror_for_strategy,
                     list_account_positions_for_strategy,
                     reconcile_strategy_vs_account,
                 )
@@ -1035,12 +1040,36 @@ def get_positions():
                         "trading_config": trading_config,
                     }
                 )
-                account_legs = list_account_positions_for_strategy(
+                mirror = live_account_mirror_for_strategy(
                     strategy_id=int(strategy_id),
                     user_id=int(user_id),
+                    strategy_market_type=market_type,
                     allowed_symbols=allowed,
                 )
-                reconciliation_status = reconcile_strategy_vs_account(out, account_legs)
+                account_legs = list(mirror.get("account_legs") or [])
+                swap_account_legs = list(mirror.get("swap_legs") or [])
+                spot_account_legs = list(mirror.get("spot_legs") or [])
+                account_snapshot_fetched_at = int(mirror.get("fetched_at") or 0)
+                reconcile_legs = list(mirror.get("reconcile_legs") or [])
+                if not account_legs:
+                    account_legs = list_account_positions_for_strategy(
+                        strategy_id=int(strategy_id),
+                        user_id=int(user_id),
+                        allowed_symbols=None,
+                    )
+                    if market_type == "spot":
+                        spot_account_legs = [
+                            leg for leg in account_legs if str(leg.get("market_type") or "") == "spot"
+                        ]
+                        reconcile_legs = spot_account_legs
+                    else:
+                        swap_account_legs = [
+                            leg
+                            for leg in account_legs
+                            if str(leg.get("market_type") or "swap") != "spot"
+                        ]
+                        reconcile_legs = filter_legs_by_symbols(swap_account_legs, allowed)
+                reconciliation_status = reconcile_strategy_vs_account(out, reconcile_legs)
             except Exception as e:
                 logger.warning(
                     "account reconciliation failed for strategy %s: %s", strategy_id, e
@@ -1097,6 +1126,9 @@ def get_positions():
                 'positions': out,
                 'items': out,
                 'account_legs': account_legs,
+                'swap_account_legs': swap_account_legs,
+                'spot_account_legs': spot_account_legs,
+                'account_snapshot_fetched_at': account_snapshot_fetched_at,
                 'reconciliation_status': reconciliation_status,
             },
         })
@@ -1197,17 +1229,27 @@ def get_grid_resting_orders():
                 logger.debug("grid-resting sync sid=%s: %s", strategy_id, sync_err)
 
         from app.services.grid.resting_orders_repo import GridRestingOrderRepository
+        from app.utils.trade_close_reason import label_for_reason
+
+        lang = str(request.args.get("lang") or request.headers.get("Accept-Language") or "zh")
+        if lang.lower().startswith("en"):
+            lang = "en"
+        else:
+            lang = "zh"
 
         repo = GridRestingOrderRepository()
         rows = repo.list_for_strategy(strategy_id, status=status, limit=limit or 200)
         out = []
         for o in rows:
+            purpose = o.purpose
             out.append({
                 'id': o.id,
                 'strategy_id': o.strategy_id,
                 'symbol': o.symbol,
                 'cell_index': o.cell_index,
-                'purpose': o.purpose,
+                'purpose': purpose,
+                'purpose_label': label_for_reason(purpose, lang=lang),
+                'purpose_label_en': label_for_reason(purpose, lang="en"),
                 'side': o.side,
                 'pos_side': o.pos_side,
                 'reduce_only': o.reduce_only,

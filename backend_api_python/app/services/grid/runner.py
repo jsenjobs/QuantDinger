@@ -173,7 +173,7 @@ class GridRestingRunner:
         if self._engine.cfg.grid_direction in ("long", "short"):
             if self._engine.cfg.initial_position_pct <= 0 or self._engine._initial_done:
                 now_exit = time.time()
-                if now_exit - self._last_exit_sync_ts >= 5.0:
+                if now_exit - self._last_exit_sync_ts >= 15.0:
                     self._engine.sync_exit_coverage(current_price)
                     self._last_exit_sync_ts = now_exit
 

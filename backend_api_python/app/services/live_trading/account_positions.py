@@ -244,6 +244,104 @@ def reconcile_strategy_vs_account(
     return {"status": status, "notes": notes}
 
 
+def snapshot_rows_to_account_legs(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize ``fetch_account_snapshot`` position rows for strategy UI."""
+    out: List[Dict[str, Any]] = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        sym = normalize_strategy_symbol(str(r.get("symbol") or "")) or str(r.get("symbol") or "").strip()
+        side = str(r.get("side") or "long").strip().lower()
+        try:
+            size = float(r.get("size") or 0.0)
+        except Exception:
+            size = 0.0
+        if not sym or side not in ("long", "short") or size <= 1e-12:
+            continue
+        mt = str(r.get("market_type") or "swap").strip().lower()
+        if mt in ("futures", "future", "perp", "perpetual"):
+            mt = "swap"
+        out.append(
+            {
+                "symbol": sym,
+                "side": side,
+                "size": size,
+                "entry_price": float(r.get("entry_price") or 0.0),
+                "mark_price": float(r.get("mark_price") or 0.0),
+                "market_type": mt,
+                "inst_id": str(r.get("inst_id") or ""),
+            }
+        )
+    return out
+
+
+def filter_legs_by_symbols(
+    legs: List[Dict[str, Any]],
+    allowed_symbols: Optional[set],
+) -> List[Dict[str, Any]]:
+    if not allowed_symbols:
+        return list(legs or [])
+    allowed = {normalize_strategy_symbol(s).upper() for s in allowed_symbols if s}
+    out: List[Dict[str, Any]] = []
+    for leg in legs or []:
+        sym = normalize_strategy_symbol(str(leg.get("symbol") or "")).upper()
+        if sym in allowed:
+            out.append(leg)
+    return out
+
+
+def live_account_mirror_for_strategy(
+    *,
+    strategy_id: int,
+    user_id: int,
+    strategy_market_type: str = "swap",
+    allowed_symbols: Optional[set] = None,
+) -> Dict[str, Any]:
+    """
+    Live fetch swap + spot legs for a strategy credential (same source as broker account modal).
+
+    ``account_legs`` includes both buckets so the trading-robot mirror matches
+    ``/account/snapshot``. ``reconcile_legs`` contains only the legs that match
+    the strategy's ``market_type`` (used for L3 vs exchange reconciliation).
+    """
+    from app.services.live_trading.account_snapshot import fetch_account_snapshot
+    from app.services.live_trading.leg_context import resolve_leg_context
+
+    ctx = resolve_leg_context(strategy_id=int(strategy_id))
+    cred = int(ctx.credential_id or 0)
+    if cred <= 0:
+        return {
+            "account_legs": [],
+            "swap_legs": [],
+            "spot_legs": [],
+            "reconcile_legs": [],
+            "fetched_at": 0,
+            "warnings": [],
+            "source": "missing_credential",
+        }
+
+    smt = str(strategy_market_type or ctx.normalized_market_type() or "swap").strip().lower()
+    if smt in ("futures", "future", "perp", "perpetual"):
+        smt = "swap"
+
+    snap = fetch_account_snapshot(user_id=int(user_id), credential_id=cred)
+    swap_legs = snapshot_rows_to_account_legs(snap.get("swap_positions") or [])
+    spot_legs = snapshot_rows_to_account_legs(snap.get("spot_positions") or [])
+    account_legs = swap_legs + spot_legs
+    reconcile_legs = spot_legs if smt == "spot" else swap_legs
+    reconcile_legs = filter_legs_by_symbols(reconcile_legs, allowed_symbols)
+
+    return {
+        "account_legs": account_legs,
+        "swap_legs": swap_legs,
+        "spot_legs": spot_legs,
+        "reconcile_legs": reconcile_legs,
+        "fetched_at": int(snap.get("fetched_at") or 0),
+        "warnings": list(snap.get("warnings") or []),
+        "source": "live_snapshot",
+    }
+
+
 def list_account_positions_for_strategy(
     *,
     strategy_id: int,

@@ -842,8 +842,39 @@ class PendingOrderWorker:
                                     exch_entry_price.setdefault(sym, {"long": 0.0, "short": 0.0})[side_str] = avg
                         # Continue to reconciliation logic below
 
+                    elif market_type == "spot":
+                        from app.services.live_trading.spot_wallet_snapshot import list_spot_wallet_positions
+
+                        try:
+                            spot_rows = list_spot_wallet_positions(client) or []
+                        except Exception as e:
+                            logger.error(
+                                f"[PositionSync] Strategy {sid} spot wallet sync failed: {e}",
+                                exc_info=True,
+                            )
+                            continue
+                        for row in spot_rows:
+                            if not isinstance(row, dict):
+                                continue
+                            sym = normalize_strategy_symbol(str(row.get("symbol") or "")) or str(
+                                row.get("symbol") or ""
+                            ).strip()
+                            side = str(row.get("side") or "long").strip().lower()
+                            try:
+                                sz = float(row.get("size") or 0.0)
+                            except Exception:
+                                sz = 0.0
+                            if not sym or side not in ("long", "short") or sz <= 1e-12:
+                                continue
+                            exch_size.setdefault(sym, {"long": 0.0, "short": 0.0})[side] = sz
+                            ep = float(row.get("entry_price") or 0.0)
+                            if ep > 0:
+                                exch_entry_price.setdefault(sym, {"long": 0.0, "short": 0.0})[side] = ep
+                            iid = str(row.get("inst_id") or "")
+                            if iid:
+                                exch_inst_id.setdefault(sym, {"long": "", "short": ""})[side] = iid
+
                     else:
-                        # Spot reconciliation is optional; skip for now (keeps self-check low-risk).
                         logger.debug(f"position sync: skip unsupported market/client: sid={sid}, cfg={safe_cfg}, market_type={market_type}, client={type(client)}")
                         continue
 
