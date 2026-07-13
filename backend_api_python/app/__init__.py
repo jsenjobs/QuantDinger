@@ -125,6 +125,11 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         _configure_cors(app)
     setup_logger()
 
+    if register_http_routes:
+        from app.observability import init_http_observability
+
+        init_http_observability(app)
+
     from app.utils.auth import _configure_jwt_secret_warnings
     _configure_jwt_secret_warnings()
 

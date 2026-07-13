@@ -31,6 +31,10 @@ from app.services.strategy_live_guard import (
 from app.services.portfolio_strategy_runtime import validate_portfolio_strategy_code
 from app.services.strategy import redact_strategy_row
 from app.routes.strategy_blueprint import strategy_blp
+from app.openapi.schemas.high_risk import (
+    StrategyIdQuerySchema,
+    StrategyStatusResponseSchema,
+)
 from app.routes.strategy_services import get_strategy_service
 from app import get_trading_executor
 from app.utils.logger import get_logger
@@ -479,10 +483,11 @@ def update_strategy():
 
 @strategy_blp.route('/strategies/delete', methods=['DELETE'])
 @login_required
-def delete_strategy():
+@strategy_blp.arguments(StrategyIdQuerySchema, location="query")
+def delete_strategy(query):
     try:
         user_id = g.user_id
-        strategy_id = request.args.get('id', type=int)
+        strategy_id = query["id"]
         if not strategy_id:
             return jsonify({'code': 0, 'msg': 'Missing strategy id parameter', 'data': None}), 400
         strategy = get_strategy_service().get_strategy(strategy_id, user_id=user_id)
@@ -505,8 +510,10 @@ def delete_strategy():
 
 
 @strategy_blp.route('/strategies/stop', methods=['POST'])
+@strategy_blp.response(200, StrategyStatusResponseSchema)
 @login_required
-def stop_strategy():
+@strategy_blp.arguments(StrategyIdQuerySchema, location="query")
+def stop_strategy(query):
     """
     Stop a strategy for the current user.
     
@@ -515,7 +522,7 @@ def stop_strategy():
     """
     try:
         user_id = g.user_id
-        strategy_id = request.args.get('id', type=int)
+        strategy_id = query["id"]
         
         if not strategy_id:
             return jsonify({
@@ -579,8 +586,10 @@ def stop_strategy():
 
 
 @strategy_blp.route('/strategies/start', methods=['POST'])
+@strategy_blp.response(200, StrategyStatusResponseSchema)
 @login_required
-def start_strategy():
+@strategy_blp.arguments(StrategyIdQuerySchema, location="query")
+def start_strategy(query):
     """
     Start a strategy for the current user.
     
@@ -589,7 +598,7 @@ def start_strategy():
     """
     try:
         user_id = g.user_id
-        strategy_id = request.args.get('id', type=int)
+        strategy_id = query["id"]
         
         if not strategy_id:
             return jsonify({

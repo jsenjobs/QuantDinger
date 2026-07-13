@@ -23,6 +23,7 @@ from app.services.market.watchlist import (
     remove_watchlist_item,
     validate_watchlist_pair,
 )
+from app.services.market_context import default_crypto_exchange_id
 from app.utils.request_guard import RequestGuardError, cache_key, guarded_cached
 from app.utils.market_visibility import is_market_visible, filter_market_items
 
@@ -273,13 +274,13 @@ def get_watchlist_prices():
                 user_id,
             )
 
-        cache_id = cache_key("watchlist_prices", user_id)
+        cache_id = cache_key("watchlist_prices", user_id, default_crypto_exchange_id())
 
         def _compute():
             watchlist = get_user_watchlist_pairs(user_id)
             if not watchlist:
                 return []
-            results = get_price_map(watchlist, timeout_sec=6)
+            results = get_price_map(watchlist, timeout_sec=10)
             success_count = sum(1 for r in results if r.get('price', 0) > 0)
             logger.debug("Watchlist prices: %s/%s successful", success_count, len(results))
             return results
@@ -289,9 +290,10 @@ def get_watchlist_prices():
             _compute,
             ttl_sec=5,
             stale_ttl_sec=120,
-            timeout_sec=7,
+            timeout_sec=11,
             namespace="watchlist_prices",
             max_concurrent=8,
+            cache_if=lambda rows: not rows or all(float(row.get('price') or 0) > 0 for row in rows),
         )
         return jsonify({'code': 1, 'msg': 'success', 'data': results})
     except RequestGuardError as e:

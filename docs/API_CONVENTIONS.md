@@ -138,7 +138,12 @@ Local interactive docs (debug mode): `/api/docs/swagger` and `/api/docs/redoc` w
 |--------|--------|-------------|
 | Health (`/`, `/health`, `/api/health`) | **Migrated** | flask-smorest |
 | Agent Gateway | Hand-written OpenAPI + CI lint | `docs/agent/agent-openapi.json` |
-| All other modules | Legacy Flask Blueprint | Not yet in `openapi.yaml` |
+| Human API route inventory | **Migrated** | flask-smorest auto-generated paths |
+| High-risk mutations | **Typed request contracts** | `app/openapi/schemas/high_risk.py` |
+| Remaining human API payloads | Incremental migration | Generic envelope with typed payloads pending |
 
-Phase 1+ will migrate `community`, `market`, etc. incrementally.
+The current high-risk contract set covers authentication, strategy lifecycle,
+credential creation and deletion, billing order creation, and quick-trade order
+and close operations. Remaining read models and lower-risk mutations should be
+migrated incrementally without changing compatibility paths.
 

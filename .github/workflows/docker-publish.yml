@@ -95,7 +95,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
-          provenance: false
+          provenance: mode=max
+          sbom: true
 
       # ----- Release-only step (skipped on workflow_dispatch) -----
 

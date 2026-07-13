@@ -45,18 +45,19 @@ RUN set -eux; \
       gosu \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt requirements.lock ./
 
 # Pip: when BUILD_REGION=cn, try Aliyun PyPI first; on any failure retry default index.
 # Otherwise install from PyPI official directly.
 RUN set -eux; \
+    python -m pip install --no-cache-dir --upgrade "pip>=26.1.2,<27"; \
     if [ "$BUILD_REGION" = "cn" ]; then \
       pip install --no-cache-dir --prefer-binary --timeout 180 \
           -i https://mirrors.aliyun.com/pypi/simple/ \
-          -r requirements.txt \
-        || pip install --no-cache-dir --prefer-binary --timeout 180 -r requirements.txt; \
+          -r requirements.lock \
+        || pip install --no-cache-dir --prefer-binary --timeout 180 -r requirements.lock; \
     else \
-      pip install --no-cache-dir --prefer-binary --timeout 180 -r requirements.txt; \
+      pip install --no-cache-dir --prefer-binary --timeout 180 -r requirements.lock; \
     fi; \
     apt-get purge -y --auto-remove build-essential python3-dev libffi-dev libssl-dev; \
     rm -rf /var/lib/apt/lists/*

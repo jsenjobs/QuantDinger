@@ -1,0 +1,75 @@
+name: Security CI
+
+on:
+  push:
+    branches: [main, master, v5.0.1-bate]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '17 3 * * 1'
+
+concurrency:
+  group: security-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  python-security:
+    name: Python dependency and source audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend_api_python/requirements-dev.txt
+
+      - name: Install audit tools
+        working-directory: ./backend_api_python
+        run: |
+          python -m pip install --upgrade pip
+          pip install "bandit[toml]>=1.8.6,<2" "pip-audit>=2.9,<3"
+
+      - name: Audit locked dependencies
+        working-directory: ./backend_api_python
+        run: pip-audit -r requirements.lock --progress-spinner off
+
+      - name: Scan high-severity source findings
+        working-directory: ./backend_api_python
+        run: bandit -q -r app -x app/data -lll -ii
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3

@@ -61,6 +61,7 @@ def guarded_cached(
     timeout_sec: float = 8.0,
     namespace: str = "default",
     max_concurrent: int | None = None,
+    cache_if: Callable[[Any], bool] | None = None,
 ) -> Any:
     """Return a cached value or compute it with per-key singleflight.
 
@@ -82,6 +83,7 @@ def guarded_cached(
     stale = _cache.get(stale_key)
     work_key = f"{namespace}:{key}"
 
+    created = False
     with _inflight_lock:
         fut = _inflight.get(work_key)
         if fut is None:
@@ -94,8 +96,10 @@ def guarded_cached(
             def _run():
                 try:
                     value = compute()
-                    _cache.set(fresh_key, value, ttl)
-                    _cache.set(stale_key, value, stale_ttl)
+                    should_cache = cache_if(value) if cache_if is not None else True
+                    if should_cache:
+                        _cache.set(fresh_key, value, ttl)
+                        _cache.set(stale_key, value, stale_ttl)
                     return value
                 finally:
                     try:
@@ -105,13 +109,15 @@ def guarded_cached(
 
             fut = _executor.submit(_run)
             _inflight[work_key] = fut
+            created = True
 
-            def _cleanup(done: Future) -> None:
-                with _inflight_lock:
-                    if _inflight.get(work_key) is done:
-                        _inflight.pop(work_key, None)
+    if created:
+        def _cleanup(done: Future) -> None:
+            with _inflight_lock:
+                if _inflight.get(work_key) is done:
+                    _inflight.pop(work_key, None)
 
-            fut.add_done_callback(_cleanup)
+        fut.add_done_callback(_cleanup)
 
     try:
         return fut.result(timeout=max(0.1, float(timeout_sec or 0.1)))

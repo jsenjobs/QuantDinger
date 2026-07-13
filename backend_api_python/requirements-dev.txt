@@ -1,0 +1,8 @@
+-r requirements.lock
+
+bandit[toml]>=1.8.6,<2
+pip-audit>=2.9.0,<3
+pytest>=9.0.3,<10
+pytest-cov>=6.2.0,<8
+pytest-timeout>=2.4.0,<3
+ruff>=0.12.0,<0.15

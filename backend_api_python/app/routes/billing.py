@@ -8,6 +8,7 @@ Membership activation is triggered only after USDT payment confirmation
 
 from flask import g, jsonify, request
 from app.openapi.blueprint import HumanBlueprint as Blueprint
+from app.openapi.schemas.high_risk import BillingOrderRequestSchema
 
 from app.utils.auth import login_required
 from app.utils.logger import get_logger
@@ -58,7 +59,8 @@ def usdt_list_chains():
 
 @billing_blp.route("/usdt/create", methods=["POST"])
 @login_required
-def usdt_create_order():
+@billing_blp.arguments(BillingOrderRequestSchema, location="json")
+def usdt_create_order(data):
     """Create a USDT membership order.
 
     Body:
@@ -70,7 +72,6 @@ def usdt_create_order():
     """
     try:
         user_id = getattr(g, "user_id", None)
-        data = request.get_json() or {}
         plan = (data.get("plan") or "").strip().lower()
         chain = (data.get("chain") or "").strip().upper() or None
         if not plan:

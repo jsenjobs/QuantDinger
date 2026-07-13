@@ -36,7 +36,7 @@ and easy to review.
 
 ## Trading Execution Domain
 
-- Future safe step: move pure signal gating and dedup helpers into `services/trading_signal_policy.py`.
+- `services/trading_signal_policy.py`: position-state, signal gating, deduplication, and risk-parameter policy.
 - Future safe step: move exchange/kline fetch helpers into `services/trading_market_data.py`.
 - Future safe step: move notification persistence into `services/trading_notifications.py`.
 - Future safe step: design portfolio-strategy execution as a separate module only after the backtest engine contract is ready.
@@ -47,6 +47,11 @@ and easy to review.
 - `services/market/*`: symbol search, quotes, watchlist.
 - Future safe step: move symbol master-data maintenance into `services/symbol_master/*`.
 - Future safe step: consolidate K-line source fallback and naming normalization into one market-data facade.
+
+## Analysis And Order Workers
+
+- `services/fast_analysis_scoring.py`: scoring and confidence calculations extracted from fast analysis orchestration.
+- `services/pending_order_position_sync.py`: exchange-position synchronization and file-descriptor backoff extracted from the pending-order worker.
 
 ## Rules
 

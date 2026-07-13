@@ -259,7 +259,10 @@ class ScriptSourceService:
             if body_start < 0:
                 continue
             body = source_code[body_start:]
-            if hashlib.md5(body.encode("utf-8")).hexdigest() not in LEGACY_EMA_TEMPLATE_BODY_MD5:
+            if hashlib.md5(
+                body.encode("utf-8"),
+                usedforsecurity=False,
+            ).hexdigest() not in LEGACY_EMA_TEMPLATE_BODY_MD5:
                 continue
             old_direction_start = source_code.find("def _side(ctx):", body_start)
             if old_direction_start < 0:

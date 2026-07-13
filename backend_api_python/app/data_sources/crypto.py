@@ -4,6 +4,7 @@
 """
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta, timezone
+import threading
 import time
 import ccxt
 
@@ -133,6 +134,7 @@ class CryptoDataSource(BaseDataSource):
     def __init__(self):
         self._scoped_exchange_id = ""
         self._scoped_market_type = "spot"
+        self._markets_load_lock = threading.Lock()
         default_ex = (CCXTConfig.DEFAULT_EXCHANGE or "binance").strip().lower()
         if default_ex == "huobi":
             default_ex = "htx"
@@ -154,6 +156,7 @@ class CryptoDataSource(BaseDataSource):
         inst = object.__new__(cls)
         inst._scoped_exchange_id = (exchange_id or "").strip().lower()
         inst._scoped_market_type = mt
+        inst._markets_load_lock = threading.Lock()
         inst._init_ccxt_exchange(ccxt_id, options)
         _SCOPED_INSTANCES[cache_key] = inst
         logger.info(
@@ -229,16 +232,23 @@ class CryptoDataSource(BaseDataSource):
         """确保 markets 已加载（用于符号验证）"""
         if self._markets_loaded and self._markets_cache is not None:
             return True
-        
-        try:
-            if hasattr(self.exchange, 'load_markets'):
-                self.exchange.load_markets(reload=False)
-            self._markets_cache = getattr(self.exchange, 'markets', {})
-            self._markets_loaded = True
-            return True
-        except Exception as e:
-            logger.debug(f"Failed to load markets for {self.exchange.id}: {e}")
-            return False
+
+        lock = getattr(self, "_markets_load_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._markets_load_lock = lock
+        with lock:
+            if self._markets_loaded and self._markets_cache is not None:
+                return True
+            try:
+                if hasattr(self.exchange, 'load_markets'):
+                    self.exchange.load_markets(reload=False)
+                self._markets_cache = getattr(self.exchange, 'markets', {})
+                self._markets_loaded = True
+                return True
+            except Exception as e:
+                logger.debug(f"Failed to load markets for {self.exchange.id}: {e}")
+                return False
     
     def _normalize_symbol(self, symbol: str) -> Tuple[str, str]:
         """

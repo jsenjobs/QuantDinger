@@ -25,8 +25,15 @@ class HumanBlueprint(SmorestBlueprint):
 
         def decorator(f):
             if not skip_envelope:
-                f = self.response(400, HumanErrorEnvelopeSchema)(f)
-                f = self.response(200, HumanSuccessEnvelopeSchema)(f)
+                responses = (
+                    getattr(f, "_apidoc", {})
+                    .get("response", {})
+                    .get("responses", {})
+                )
+                if 400 not in responses:
+                    f = self.response(400, HumanErrorEnvelopeSchema)(f)
+                if 200 not in responses:
+                    f = self.response(200, HumanSuccessEnvelopeSchema)(f)
             return SmorestBlueprint.route(self, rule, methods=methods, **options)(f)
 
         return decorator

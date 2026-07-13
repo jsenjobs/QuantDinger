@@ -8,6 +8,7 @@ from functools import lru_cache
 
 import redis
 
+from app.config.redis_urls import celery_broker_url
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -55,12 +56,7 @@ def _celery_enabled() -> bool:
 
 @lru_cache(maxsize=1)
 def _redis_client():
-    url = os.getenv("CELERY_BROKER_URL", "").strip()
-    if url:
-        return redis.Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
-    host = os.getenv("REDIS_HOST", "localhost")
-    port = int(os.getenv("REDIS_PORT", "6379"))
-    return redis.Redis(host=host, port=port, db=0, socket_connect_timeout=2, socket_timeout=2)
+    return redis.Redis.from_url(celery_broker_url(), socket_connect_timeout=2, socket_timeout=2)
 
 
 def _redis_inflight_key(key: str) -> str:

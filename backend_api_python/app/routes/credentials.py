@@ -8,6 +8,11 @@ import traceback
 import json
 from flask import g, jsonify, request
 from app.openapi.blueprint import HumanBlueprint as Blueprint
+from app.openapi.schemas.high_risk import (
+    CredentialCreateRequestSchema,
+    CredentialCreatedResponseSchema,
+    StrategyIdQuerySchema,
+)
 
 import requests as rq
 
@@ -136,15 +141,16 @@ def get_egress_ip():
 
 
 @credentials_blp.route('/create', methods=['POST'])
+@credentials_blp.response(200, CredentialCreatedResponseSchema)
 @login_required
-def create_credential():
+@credentials_blp.arguments(CredentialCreateRequestSchema, location="json")
+def create_credential(data):
     """Create a new credential for the current user.
 
     Supports crypto exchanges, IBKR (US stocks), and Alpaca.
     """
     try:
         user_id = g.user_id
-        data = request.get_json() or {}
         name = (data.get('name') or '').strip()
         exchange_id = (data.get('exchange_id') or '').strip().lower()
 
@@ -287,11 +293,12 @@ def update_credential_name():
 
 @credentials_blp.route('/delete', methods=['DELETE'])
 @login_required
-def delete_credential():
+@credentials_blp.arguments(StrategyIdQuerySchema, location="query")
+def delete_credential(query):
     """Delete a credential for the current user."""
     try:
         user_id = g.user_id
-        cred_id = request.args.get('id', type=int)
+        cred_id = query["id"]
         if not cred_id:
             return jsonify({'code': 0, 'msg': 'Missing id', 'data': None}), 400
 

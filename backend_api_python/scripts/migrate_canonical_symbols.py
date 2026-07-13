@@ -148,7 +148,7 @@ def merge_duplicate_legs(dry_run: bool) -> int:
 
     with get_db_connection() as db:
         cur = db.cursor()
-        for (_sid, _mt, _side, _canon), items in groups.items():
+        for (_sid, _mt, _side, canonical_symbol), items in groups.items():
             if len(items) <= 1:
                 continue
             total_size = sum(float(x.get("size") or 0.0) for x in items)
@@ -159,7 +159,7 @@ def merge_duplicate_legs(dry_run: bool) -> int:
             drop_ids = [int(x["id"]) for x in items if int(x["id"]) != keep_id]
             merged += 1
             print(
-                f"[merge] strategy={_sid} {_mt} {_side} {_canon}: "
+                f"[merge] strategy={_sid} {_mt} {_side} {canonical_symbol}: "
                 f"keep id={keep_id} size={total_size:.8f} drop={drop_ids}"
             )
             if dry_run:
@@ -170,7 +170,7 @@ def merge_duplicate_legs(dry_run: bool) -> int:
                 SET symbol = %s, symbol_canonical = %s, size = %s, entry_price = %s
                 WHERE id = %s
                 """,
-                (_canon, _canon, total_size, entry, keep_id),
+                (canonical_symbol, canonical_symbol, total_size, entry, keep_id),
             )
             for did in drop_ids:
                 cur.execute("DELETE FROM qd_strategy_positions WHERE id = %s", (did,))

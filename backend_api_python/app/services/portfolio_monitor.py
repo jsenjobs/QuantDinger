@@ -816,7 +816,10 @@ def _build_html_report(
             '''
         
         # Generate unique ID for collapsible sections (use symbol hash to avoid special chars)
-        section_id_base = hashlib.md5(f"{symbol}_{market}_{group_name}".encode()).hexdigest()[:8]
+        section_id_base = hashlib.md5(
+            f"{symbol}_{market}_{group_name}".encode(),
+            usedforsecurity=False,
+        ).hexdigest()[:8]
         
         # Collapsible: Trader Analysis
         if trader_reasoning:

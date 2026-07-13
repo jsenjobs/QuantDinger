@@ -1,25 +1,19 @@
-﻿name: Basic CI
-
-# Basic CI workflow for backend syntax and lint checks.
-# This workflow ensures the backend codebase has no syntax errors and passes linting.
-# It does NOT run tests, start servers, or require external services.
-#
-# Note: Frontend source code and CI live in the private QuantDinger-Vue repo.
-# The published `ghcr.io/<owner>/quantdinger-frontend` image is consumed
-# directly by both docker-compose files — no frontend source or build
-# artefacts are checked in here.
+name: Backend CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, v5.0.1-bate]
   pull_request:
     branches: [main, master]
 
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  python-check:
-    name: Python Syntax Check
+  quality:
+    name: Lint and structure guardrails
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,75 +22,136 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          # Use Python 3.12 to match Dockerfile and support f-string expressions with backslashes (PEP 701)
+          cache: pip
+          cache-dependency-path: backend_api_python/requirements-dev.txt
 
-      - name: Install dependencies
+      - name: Install development dependencies
         working-directory: ./backend_api_python
         run: |
           python -m pip install --upgrade pip
-          # Install dependencies, excluding Windows-only packages (MetaTrader5)
-          # MetaTrader5 is Windows-only and not available on Linux, so we filter it out
-          grep -v "MetaTrader5" requirements.txt > /tmp/requirements_ci.txt
-          pip install -r /tmp/requirements_ci.txt
-          # Install dependencies to verify they are installable and enable import checks.
+          pip install -r requirements-dev.txt
 
       - name: Python syntax check
         working-directory: ./backend_api_python
         run: |
-          # Check Python syntax for all .py files using compileall
-          # This catches syntax errors, indentation issues, and basic structural problems
-          echo "Checking Python syntax..."
           python -m py_compile run.py
-          python -m compileall -q app/ scripts/ || (echo "Python syntax check failed" && exit 1)
-          echo "✓ Python syntax check passed"
+          python -m compileall -q app scripts tests
+
+      - name: Ruff critical lint
+        working-directory: ./backend_api_python
+        run: ruff check app scripts tests
+
+      - name: Backend structure guardrail
+        working-directory: ./backend_api_python
+        run: python scripts/backend_quality_check.py
+
+      - name: Production dependency lock guardrail
+        working-directory: ./backend_api_python
+        run: python scripts/check_requirements_lock.py
 
       - name: Python import check
         working-directory: ./backend_api_python
+        env:
+          SKIP_STARTUP_HOOKS: '1'
+          SECRET_KEY: ci-secret-key-with-at-least-thirty-two-bytes
         run: |
-          # Verify critical modules can be imported
-          # We import but do NOT call create_app() to avoid triggering:
-          # - Database connections
-          # - Worker threads
-          # - Network services
-          python -c "
-          import sys
-          sys.path.insert(0, '.')
-          
-          # Import key modules to verify they are loadable
-          from app import create_app
-          from app.config import settings
-          from app.openapi import init_openapi
-          
-          print('✓ Core modules imported successfully')
-          print('✓ No critical import errors detected')
-          "
-          # This will FAIL if:
-          # - Critical imports fail (missing dependencies, broken module structure)
-          # This will PASS if:
-          # - Dependencies are available and importable
-          # - Core module structure is intact
+          python -c "from app import create_app; from app.config import settings; from app.openapi import init_openapi; print('Core modules imported successfully')"
 
-  compose-check:
-    name: Docker Compose Validation
+  tests:
+    name: Backend tests
     runs-on: ubuntu-latest
-
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: quantdinger_test
+          POSTGRES_PASSWORD: quantdinger_test
+          POSTGRES_DB: quantdinger_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quantdinger_test -d quantdinger_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://quantdinger_test:quantdinger_test@127.0.0.1:5432/quantdinger_test
+      DB_TYPE: postgresql
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      CACHE_ENABLED: 'false'
+      SKIP_STARTUP_HOOKS: '1'
+      SECRET_KEY: ci-secret-key-with-at-least-thirty-two-bytes
+      ADMIN_USER: testadmin
+      ADMIN_PASSWORD: testpass123
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Validate docker-compose.yml (build mode)
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend_api_python/requirements-dev.txt
+
+      - name: Install development dependencies
+        working-directory: ./backend_api_python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run database migrations
+        working-directory: ./backend_api_python
+        env:
+          QD_PROCESS_ROLE: migration
+        run: python -m app.commands.migrate
+
+      - name: Run backend test suite
+        working-directory: ./backend_api_python
+        run: python -m pytest -m "not integration and not stress" --ignore=tests/release_gate -q
+
+      - name: Run release gates independently
+        working-directory: ./backend_api_python
+        run: |
+          python -m pytest tests/release_gate/test_cta_backtest_release_gate.py -q
+          python -m pytest tests/release_gate/test_live_execution_release_gate.py -q
+          python -m pytest tests/release_gate/test_robot_strategy_unification.py -q
+
+  compose-check:
+    name: Docker Compose validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate local compose
         run: docker compose -f docker-compose.yml config -q
 
-      - name: Validate docker-compose.ghcr.yml (GHCR mode)
+      - name: Validate GHCR compose
         run: docker compose -f docker-compose.ghcr.yml config -q
 
-      - name: Validate docker-compose.yml + build override (merged)
+      - name: Validate local build override
         run: docker compose -f docker-compose.yml -f docker-compose.build.yml config -q
 
-  version-check:
-    name: Version Consistency
-    runs-on: ubuntu-latest
+      - name: Validate observability override
+        run: docker compose -f docker-compose.yml -f docker-compose.observability.yml config -q
 
+      - name: Validate production hardening override
+        run: docker compose -f docker-compose.yml -f docker-compose.production.yml -f docker-compose.observability.yml config -q
+
+  version-check:
+    name: Repository consistency
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -106,12 +161,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Verify VERSION matches all declarations
-        # Fails if any *tracked* version constant drifts from repo-root VERSION.
-        # Frontend paths under QuantDinger-Vue-src/ are gitignored (private FE
-        # repo) and are skipped when absent. Run bump_version.py locally with
-        # the full FE checkout to sync those files before building the image.
+      - name: Verify version declarations
         run: python scripts/check_version.py
 
-      - name: Check for mojibake in tracked text files
+      - name: Check tracked text encoding
         run: python scripts/check_mojibake.py

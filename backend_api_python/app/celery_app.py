@@ -5,14 +5,7 @@ from __future__ import annotations
 import os
 
 from celery import Celery, Task
-
-
-def _redis_url(database: int) -> str:
-    host = os.getenv("REDIS_HOST", "localhost")
-    port = os.getenv("REDIS_PORT", "6379")
-    password = os.getenv("REDIS_PASSWORD", "").strip()
-    auth = f":{password}@" if password else ""
-    return f"redis://{auth}{host}:{port}/{database}"
+from app.config.redis_urls import celery_broker_url, celery_result_backend_url
 
 
 class FlaskContextTask(Task):
@@ -31,8 +24,8 @@ class FlaskContextTask(Task):
 
 celery_app = Celery("quantdinger", task_cls=FlaskContextTask)
 celery_app.conf.update(
-    broker_url=os.getenv("CELERY_BROKER_URL", _redis_url(1)),
-    result_backend=os.getenv("CELERY_RESULT_BACKEND", _redis_url(2)),
+    broker_url=celery_broker_url(),
+    result_backend=celery_result_backend_url(),
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],

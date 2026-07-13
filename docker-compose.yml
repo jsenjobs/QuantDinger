@@ -35,16 +35,36 @@ x-backend-build: &backend-build
     APP_VERSION: ${APP_VERSION:-}
     GIT_TAG: ${GIT_TAG:-${IMAGE_TAG:-}}
 
+x-backend-runtime: &backend-runtime
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: ${BACKEND_PIDS_LIMIT:-512}
+  stop_grace_period: ${BACKEND_STOP_GRACE_PERIOD:-45s}
+  logging:
+    driver: json-file
+    options:
+      max-size: ${CONTAINER_LOG_MAX_SIZE:-20m}
+      max-file: ${CONTAINER_LOG_MAX_FILES:-5}
+
 x-worker-environment: &worker-environment
   TZ: ${TZ:-Asia/Shanghai}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
   DATABASE_URL: postgresql://${POSTGRES_USER:-quantdinger}:${POSTGRES_PASSWORD:-quantdinger123}@postgres:5432/${POSTGRES_DB:-quantdinger}
   DB_TYPE: postgresql
   REDIS_HOST: redis
   REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  REDIS_CACHE_NAMESPACE: ${REDIS_CACHE_NAMESPACE:-quantdinger:cache:v1}
   CACHE_ENABLED: "true"
   CELERY_TASKS_ENABLED: "true"
-  CELERY_BROKER_URL: redis://redis-jobs:6379/0
-  CELERY_RESULT_BACKEND: redis://redis-jobs:6379/1
+  CELERY_REDIS_HOST: redis-jobs
+  CELERY_REDIS_PORT: 6379
+  CELERY_REDIS_PASSWORD: ${CELERY_REDIS_PASSWORD:-}
+  CELERY_BROKER_DB: 0
+  CELERY_RESULT_DB: 1
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-}
   DB_POOL_MIN: ${WORKER_DB_POOL_MIN:-2}
   DB_POOL_MAX: ${WORKER_DB_POOL_MAX:-12}
   DB_POOL_ACQUIRE_TIMEOUT: ${DB_POOL_ACQUIRE_TIMEOUT:-10}
@@ -95,13 +115,20 @@ services:
     image: ${REDIS_IMAGE:-${IMAGE_PREFIX:-}redis:8-alpine}
     container_name: quantdinger-redis
     restart: unless-stopped
-    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -ec
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then set -- --requirepass "$$REDIS_PASSWORD"; fi
+        exec redis-server --maxmemory "${REDIS_CACHE_MAXMEMORY:-128mb}" --maxmemory-policy allkeys-lru "$$@"
     ports:
       - "${REDIS_PORT:-127.0.0.1:6379}:6379"
     networks:
       - quantdinger-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -110,18 +137,26 @@ services:
     image: ${REDIS_IMAGE:-${IMAGE_PREFIX:-}redis:8-alpine}
     container_name: quantdinger-redis-jobs
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    environment:
+      REDIS_PASSWORD: ${CELERY_REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -ec
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then set -- --requirepass "$$REDIS_PASSWORD"; fi
+        exec redis-server --appendonly yes --appendfsync everysec --save 60 1000 --maxmemory "${REDIS_JOBS_MAXMEMORY:-512mb}" --maxmemory-policy noeviction "$$@"
     volumes:
       - celery_redis_data:/data
     networks:
       - quantdinger-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   migration:
+    <<: *backend-runtime
     build: *backend-build
     image: ${BACKEND_LOCAL_IMAGE:-quantdinger-backend:local}
     container_name: quantdinger-migration
@@ -146,6 +181,7 @@ services:
   # Backend API (Python/Flask)
   # ========================
   backend:
+    <<: *backend-runtime
     build: *backend-build
     image: ${BACKEND_LOCAL_IMAGE:-quantdinger-backend:local}
     container_name: quantdinger-backend
@@ -179,12 +215,21 @@ services:
       - DB_TYPE=postgresql
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_CACHE_NAMESPACE=${REDIS_CACHE_NAMESPACE:-quantdinger:cache:v1}
       - CACHE_ENABLED=true
       - QD_PROCESS_ROLE=api
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/quantdinger-prometheus
       - STRATEGY_COMMANDS_ENABLED=true
       - CELERY_TASKS_ENABLED=true
-      - CELERY_BROKER_URL=redis://redis-jobs:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis-jobs:6379/1
+      - CELERY_REDIS_HOST=redis-jobs
+      - CELERY_REDIS_PORT=6379
+      - CELERY_REDIS_PASSWORD=${CELERY_REDIS_PASSWORD:-}
+      - CELERY_BROKER_DB=0
+      - CELERY_RESULT_DB=1
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-}
       - SKIP_AUTO_MIGRATE=true
       # Database connection pool tuning (see app/utils/db_postgres.py).
       # Defaults are safe for ~50 concurrent DB users; raise if you run many
@@ -218,6 +263,7 @@ services:
       retries: 3
 
   trading-worker:
+    <<: *backend-runtime
     build: *backend-build
     image: ${BACKEND_LOCAL_IMAGE:-quantdinger-backend:local}
     container_name: quantdinger-trading-worker
@@ -248,6 +294,7 @@ services:
       start_period: 30s
 
   scheduler-worker:
+    <<: *backend-runtime
     build: *backend-build
     image: ${BACKEND_LOCAL_IMAGE:-quantdinger-backend:local}
     container_name: quantdinger-scheduler-worker
@@ -277,6 +324,7 @@ services:
       start_period: 30s
 
   celery-worker:
+    <<: *backend-runtime
     build: *backend-build
     image: ${BACKEND_LOCAL_IMAGE:-quantdinger-backend:local}
     container_name: quantdinger-celery-worker
@@ -308,6 +356,7 @@ services:
       start_period: 45s
 
   celery-beat:
+    <<: *backend-runtime
     build: *backend-build
     image: ${BACKEND_LOCAL_IMAGE:-quantdinger-backend:local}
     container_name: quantdinger-celery-beat
@@ -383,7 +432,7 @@ services:
     container_name: quantdinger-mobile
     restart: unless-stopped
     ports:
-      - "${MOBILE_PORT:-8889}:80"
+      - "${MOBILE_HOST:-127.0.0.1}:${MOBILE_PORT:-8889}:80"
     environment:
       - BACKEND_URL=${BACKEND_URL:-http://backend:5000}
     depends_on:

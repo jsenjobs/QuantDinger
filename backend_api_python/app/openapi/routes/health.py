@@ -3,9 +3,11 @@ import os
 from datetime import datetime, timezone
 
 import redis
+from flask import Response
 from flask_smorest import Blueprint
 
 from app._version import APP_VERSION
+from app.config.redis_urls import celery_broker_url
 from app.openapi.schemas.common import (
     ApiInfoSchema,
     HealthStatusSchema,
@@ -14,6 +16,7 @@ from app.openapi.schemas.common import (
 )
 from app.runtime.roles import current_process_role
 from app.utils.db import get_db_connection
+from app.observability.metrics import render_metrics
 
 blp = Blueprint(
     "health",
@@ -91,7 +94,7 @@ def worker_health_check():
                     """
                     SELECT role,
                            COUNT(*) FILTER (WHERE status = 'running' AND heartbeat_at >= NOW() - INTERVAL '45 seconds') AS healthy,
-                           COUNT(*) FILTER (WHERE status = 'running' AND heartbeat_at >= NOW() - INTERVAL '45 seconds') AS total,
+                           COUNT(*) FILTER (WHERE status = 'running') AS total,
                            COUNT(*) FILTER (WHERE heartbeat_at < NOW() - INTERVAL '45 seconds') AS stale,
                            MAX(heartbeat_at) AS last_heartbeat
                     FROM qd_worker_heartbeats
@@ -109,6 +112,18 @@ def worker_health_check():
     return payload
 
 
+@blp.route("/metrics", methods=["GET"])
+@blp.doc(
+    summary="Prometheus metrics",
+    tags=["Health"],
+    operationId="getPrometheusMetrics",
+    x_visibility="internal",
+)
+def metrics():
+    body, content_type = render_metrics()
+    return Response(body, content_type=content_type)
+
+
 def _postgres_ready() -> bool:
     try:
         with get_db_connection() as db:
@@ -123,11 +138,12 @@ def _postgres_ready() -> bool:
 
 
 def _celery_broker_ready() -> bool:
-    url = os.getenv("CELERY_BROKER_URL", "").strip()
-    if not url:
-        return os.getenv("CELERY_TASKS_ENABLED", "false").strip().lower() not in {
-            "1", "true", "yes", "on",
-        }
+    enabled = os.getenv("CELERY_TASKS_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if not enabled:
+        return True
+    url = celery_broker_url()
     client = None
     try:
         client = redis.Redis.from_url(url, socket_connect_timeout=1, socket_timeout=1)

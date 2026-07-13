@@ -22,6 +22,10 @@ from typing import Any, Dict, List
 
 from flask import g, jsonify, request
 from app.openapi.blueprint import HumanBlueprint as Blueprint
+from app.openapi.schemas.high_risk import (
+    QuickTradeCloseRequestSchema,
+    QuickTradeOrderRequestSchema,
+)
 
 from app.utils.db import get_db_connection
 from app.utils.logger import get_logger
@@ -278,7 +282,8 @@ def _record_quick_trade(
 
 @quick_trade_blp.route('/place-order', methods=['POST'])
 @login_required
-def place_order():
+@quick_trade_blp.arguments(QuickTradeOrderRequestSchema, location="json")
+def place_order(body):
     """
     Place a quick market or limit order.
 
@@ -299,8 +304,6 @@ def place_order():
     """
     try:
         user_id = g.user_id
-        body = request.get_json(force=True, silent=True) or {}
-
         credential_id = int(body.get("credential_id") or 0)
         symbol = str(body.get("symbol") or "").strip()
         side = str(body.get("side") or "").strip().lower()
@@ -1334,7 +1337,8 @@ def _quick_trade_net_base_qty(
 
 @quick_trade_blp.route('/close-position', methods=['POST'])
 @login_required
-def close_position():
+@quick_trade_blp.arguments(QuickTradeCloseRequestSchema, location="json")
+def close_position(body):
     """
     Close an existing position.
     
@@ -1349,8 +1353,6 @@ def close_position():
     """
     try:
         user_id = g.user_id
-        body = request.get_json(force=True, silent=True) or {}
-        
         credential_id = int(body.get("credential_id") or 0)
         symbol = str(body.get("symbol") or "").strip()
         market_type = str(body.get("market_type") or "swap").strip().lower()

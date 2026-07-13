@@ -14,17 +14,17 @@ CREATE TABLE IF NOT EXISTS qd_users (
     avatar VARCHAR(255) DEFAULT '/avatar2.jpg',
     status VARCHAR(20) DEFAULT 'active',  -- active/disabled/pending
     role VARCHAR(20) DEFAULT 'user',       -- admin/manager/user/viewer
-    credits DECIMAL(20,2) DEFAULT 0,       -- 绉垎浣欓
+    credits DECIMAL(20,2) DEFAULT 0,
     vip_expires_at TIMESTAMP,              -- VIP杩囨湡鏃堕棿
-    vip_plan VARCHAR(20) DEFAULT '',       -- VIP濂楅锛歮onthly/yearly/lifetime
-    vip_is_lifetime BOOLEAN DEFAULT FALSE, -- 鏄惁姘镐箙浼氬憳
-    vip_monthly_credits_last_grant TIMESTAMP, -- 姘镐箙浼氬憳涓婃鍙戞斁鏈堝害绉垎鏃堕棿
-    email_verified BOOLEAN DEFAULT FALSE,  -- 閭鏄惁宸查獙璇?
+    vip_plan VARCHAR(20) DEFAULT '',
+    vip_is_lifetime BOOLEAN DEFAULT FALSE,
+    vip_monthly_credits_last_grant TIMESTAMP,
+    email_verified BOOLEAN DEFAULT FALSE,
     referred_by INTEGER,                   -- 閭€璇蜂汉ID
-    notification_settings TEXT DEFAULT '', -- 鐢ㄦ埛閫氱煡閰嶇疆 JSON (telegram_chat_id, default_channels绛?
+    notification_settings TEXT DEFAULT '',
     chart_templates TEXT DEFAULT '',      -- 鐢ㄦ埛鍥捐〃妯℃澘 JSON锛堟寚鏍囧竷灞€/鏍峰紡锛?
-    timezone VARCHAR(64) DEFAULT '',       -- IANA 鏃跺尯鏍囪瘑锛岀┖琛ㄧず璺熼殢瀹㈡埛绔?娴忚鍣?
-    token_version INTEGER DEFAULT 1,       -- Token鐗堟湰鍙凤紝鐢ㄤ簬鍗曚竴瀹㈡埛绔櫥褰曟帶鍒?
+    timezone VARCHAR(64) DEFAULT '',
+    token_version INTEGER DEFAULT 1,
     password_changed_at TIMESTAMP,           -- NULL only prompts when bootstrap password is still 123456
     last_login_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -37,19 +37,19 @@ CREATE INDEX IF NOT EXISTS idx_users_referred_by ON qd_users(referred_by);
 -- using ADMIN_USER and ADMIN_PASSWORD from environment variables
 
 -- =============================================================================
--- 1.5. Credits Log (绉垎鍙樺姩鏃ュ織)
+
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS qd_credits_log (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
     action VARCHAR(50) NOT NULL,            -- recharge/consume/refund/admin_adjust/vip_grant
-    amount DECIMAL(20,2) NOT NULL,          -- 鍙樺姩閲戦锛堟鏁板鍔狅紝璐熸暟鍑忓皯锛?
+    amount DECIMAL(20,2) NOT NULL,
     balance_after DECIMAL(20,2) NOT NULL,   -- 鍙樺姩鍚庝綑棰?
     feature VARCHAR(50) DEFAULT '',          -- 娑堣垂鐨勫姛鑳斤細ai_analysis/strategy_run/backtest 绛?
-    reference_id VARCHAR(100) DEFAULT '',    -- 鍏宠仈ID锛堝璁㈠崟鍙枫€佸垎鏋愪换鍔D绛夛級
+    reference_id VARCHAR(100) DEFAULT '',
     remark TEXT DEFAULT '',                  -- 澶囨敞
-    operator_id INTEGER,                     -- 鎿嶄綔浜篒D锛堢鐞嗗憳璋冩暣鏃惰褰曪級
+    operator_id INTEGER,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -58,15 +58,15 @@ CREATE INDEX IF NOT EXISTS idx_credits_log_action ON qd_credits_log(action);
 CREATE INDEX IF NOT EXISTS idx_credits_log_created_at ON qd_credits_log(created_at);
 
 -- =============================================================================
--- 1.55. Membership Orders (浼氬憳璁㈠崟 - Mock鏀粯)
+
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS qd_membership_orders (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
     plan VARCHAR(20) NOT NULL,             -- monthly/yearly/lifetime
-    price_usd DECIMAL(10,2) DEFAULT 0,     -- 璁㈠崟閲戦锛圲SD锛?
-    status VARCHAR(20) DEFAULT 'paid',     -- paid/pending/failed/refunded (mock 榛樿 paid)
+    price_usd DECIMAL(10,2) DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'paid',
     created_at TIMESTAMP DEFAULT NOW(),
     paid_at TIMESTAMP
 );
@@ -169,7 +169,7 @@ END
 $$;
 
 -- =============================================================================
--- 1.59. OAuth CSRF State (澶?worker / 澶氬疄渚嬪叡浜紝閬垮厤 Invalid state)
+
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS qd_oauth_states (
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS qd_oauth_states (
 CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON qd_oauth_states(expires_at);
 
 -- =============================================================================
--- 1.6. Verification Codes (閭楠岃瘉鐮?
+
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS qd_verification_codes (
@@ -220,7 +220,7 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts_identifier ON qd_login_attempts(id
 CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON qd_login_attempts(attempt_time);
 
 -- =============================================================================
--- 1.8. OAuth Links (绗笁鏂硅处鍙峰叧鑱?
+
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS qd_oauth_links (
@@ -242,7 +242,7 @@ CREATE INDEX IF NOT EXISTS idx_oauth_links_user_id ON qd_oauth_links(user_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_links_provider ON qd_oauth_links(provider);
 
 -- =============================================================================
--- 1.9. Security Audit Log (瀹夊叏瀹¤鏃ュ織)
+
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS qd_security_logs (
@@ -653,7 +653,7 @@ CREATE TABLE IF NOT EXISTS qd_indicator_codes (
    price numeric(10, 2) DEFAULT 0 NOT NULL,
    is_encrypted int4 DEFAULT 0 NOT NULL,
    preview_image varchar(500) DEFAULT ''::character varying NULL,
-   vip_free boolean DEFAULT false, -- VIP鍏嶈垂鎸囨爣锛歏IP鍙厤鎵ｇН鍒嗕娇鐢?
+   vip_free boolean DEFAULT false,
    createtime int8 NULL,
    updatetime int8 NULL,
    created_at timestamp DEFAULT now(),
@@ -667,15 +667,15 @@ CREATE TABLE IF NOT EXISTS qd_indicator_codes (
    reviewed_at timestamp NULL,
    reviewed_by int4 NULL,
    asset_type varchar(32) DEFAULT 'indicator'::character varying NULL,
-    -- 瀵瑰凡璐敤鎴疯€岃█锛屾湰鍦板壇鏈€氳繃姝ゅ瓧娈靛叧鑱斿埌甯傚満涓婄殑鍘熷鎸囨爣锛?
-    -- 鐢ㄤ簬鍚庣画"鍚屾浠ｇ爜"鍔熻兘鎷夊彇鍙戝竷鑰呯殑鏈€鏂扮増鏈?
+
+
     source_indicator_id int4 NULL,
     source_script_source_id int4 NULL,
     source_strategy_id int4 NULL,
-    -- 澶氳瑷€鏀寔锛氱敤鎴蜂笂浼犵殑 name / description 鐢?source_language 鏍囪瘑鍘熷璇█
+
     -- (zh-CN / en-US / ja-JP 绛?锛沶ame_i18n / description_i18n 鏄?LLM 缈昏瘧鐢熸垚鐨?
     -- JSONB锛岀粨鏋勫舰濡?{"en-US": "...", "zh-CN": "...", ...}銆?
-    -- 甯傚満/璇︽儏鎺ュ彛鎸?Accept-Language 鍛戒腑锛氬厛鏌?i18n 瀵瑰簲閿紝鏈懡涓啀鍥為€€鍒板師濮?name銆?
+
     -- 瑙?app/services/indicator_translator.py 涓?community_service.py:_localize_indicator銆?
     source_language varchar(16) DEFAULT NULL,
     name_i18n        jsonb       DEFAULT NULL,
@@ -995,19 +995,6 @@ WHERE code = 'hk_etf' AND is_system = TRUE;
 UPDATE qd_universes SET status = 'deprecated', updated_at = NOW()
 WHERE code IN ('etf_pool', 'hk_equities', 'hk_core') AND is_system = TRUE;
 
-UPDATE qd_market_symbols SET is_hot = 1, sort_order = GREATEST(sort_order, 80)
-WHERE market = 'HKStock' AND asset_class = 'etf' AND symbol IN (
-  '02800','02801','02823','02828','02840','02846','03032','03033','03037',
-  '03040','03067','03075','03088','03110','03188','03191','03416','03437'
-);
-
-UPDATE qd_market_symbols SET is_hot = 1, sort_order = GREATEST(sort_order, 80)
-WHERE market = 'USStock' AND asset_class = 'etf' AND symbol IN (
-  'SPY','QQQ','IWM','DIA','VTI','VOO','IVV','EFA','EEM','AGG','BND','TLT','IEF',
-  'GLD','SLV','USO','XLF','XLK','XLE','XLV','XLI','XLY','XLP','XLU','VNQ','ARKK',
-  'HYG','LQD','SCHD','VUG','VTV'
-);
-
 -- =============================================================================
 -- 11. Analysis Tasks
 -- =============================================================================
@@ -1267,6 +1254,17 @@ UPDATE qd_market_symbols SET asset_class = 'forex'
 WHERE market = 'Forex' AND asset_class = 'crypto';
 UPDATE qd_market_symbols SET asset_class = 'futures'
 WHERE market = 'Futures' AND asset_class = 'crypto';
+UPDATE qd_market_symbols SET is_hot = 1, sort_order = GREATEST(sort_order, 80)
+WHERE market = 'HKStock' AND asset_class = 'etf' AND symbol IN (
+  '02800','02801','02823','02828','02840','02846','03032','03033','03037',
+  '03040','03067','03075','03088','03110','03188','03191','03416','03437'
+);
+UPDATE qd_market_symbols SET is_hot = 1, sort_order = GREATEST(sort_order, 80)
+WHERE market = 'USStock' AND asset_class = 'etf' AND symbol IN (
+  'SPY','QQQ','IWM','DIA','VTI','VOO','IVV','EFA','EEM','AGG','BND','TLT','IEF',
+  'GLD','SLV','USO','XLF','XLK','XLE','XLV','XLI','XLY','XLP','XLU','VNQ','ARKK',
+  'HYG','LQD','SCHD','VUG','VTV'
+);
 ALTER TABLE qd_market_symbols DROP CONSTRAINT IF EXISTS qd_market_symbols_market_symbol_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_market_symbols_venue_instrument
   ON qd_market_symbols(market, symbol, exchange, market_type, instrument_id);
@@ -1856,7 +1854,7 @@ CREATE INDEX IF NOT EXISTS idx_account_pos_cred ON qd_account_positions(credenti
 -- 21. Indicator Community Tables
 -- =============================================================================
 
--- Indicator Purchases (璐拱璁板綍)
+
 CREATE TABLE IF NOT EXISTS qd_indicator_purchases (
     id SERIAL PRIMARY KEY,
     indicator_id INTEGER NOT NULL REFERENCES qd_indicator_codes(id) ON DELETE CASCADE,
@@ -1892,7 +1890,7 @@ CREATE INDEX IF NOT EXISTS idx_purchases_indicator ON qd_indicator_purchases(ind
 CREATE INDEX IF NOT EXISTS idx_purchases_buyer ON qd_indicator_purchases(buyer_id);
 CREATE INDEX IF NOT EXISTS idx_purchases_seller ON qd_indicator_purchases(seller_id);
 
--- Indicator Comments (璇勮)
+
 CREATE TABLE IF NOT EXISTS qd_indicator_comments (
     id SERIAL PRIMARY KEY,
     indicator_id INTEGER NOT NULL REFERENCES qd_indicator_codes(id) ON DELETE CASCADE,
@@ -1978,7 +1976,7 @@ CREATE INDEX IF NOT EXISTS idx_quick_trades_created ON qd_quick_trades(created_a
 
 -- Migration: Add commission tracking columns to existing qd_quick_trades.
 -- (Introduced in v3.0.8. Pre-existing rows default to 0 / '' which is the
--- accurate value 鈥?those orders were never enriched with exchange fee data.)
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -1994,14 +1992,14 @@ END $$;
 -- =============================================================================
 -- Polymarket (宸茬Щ闄?/ removed in v3.0.7)
 -- =============================================================================
--- 棰勬祴甯傚満鐩稿叧鍔熻兘宸蹭笅绾匡紝鐩稿叧鍚庡彴 LLM worker銆丄PI銆佹暟鎹簮鍏ㄩ儴鍒犻櫎銆?
--- 鑰佸簱涓€娆℃€ф竻鐞嗗搴?3 寮犺〃涓庣储寮曪紱鑻ユ槸鍏ㄦ柊閮ㄧ讲锛屼笅闈?DROP 鏄?no-op銆?
+
+
 DROP TABLE IF EXISTS qd_polymarket_asset_opportunities CASCADE;
 DROP TABLE IF EXISTS qd_polymarket_ai_analysis CASCADE;
 DROP TABLE IF EXISTS qd_polymarket_markets CASCADE;
 
 -- =============================================================================
--- 30. Agent Gateway (/api/agent/v1) 鈥?tokens, async jobs, audit, idempotency
+
 -- =============================================================================
 -- These tables back the multi-agent runtime (see docs/agent/AI_INTEGRATION_DESIGN.md).
 -- They are tenant-scoped via user_id and stay isolated from human JWT sessions.

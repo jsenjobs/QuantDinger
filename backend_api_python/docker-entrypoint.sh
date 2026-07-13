@@ -93,6 +93,13 @@ if [ -z "$CURRENT_CREDENTIAL_KEY" ]; then
     fi
 fi
 
+# Prometheus client multiprocess files must start clean for each API container.
+if [ -n "${PROMETHEUS_MULTIPROC_DIR:-}" ]; then
+    mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
+    rm -f "$PROMETHEUS_MULTIPROC_DIR"/*.db
+    chown -R quantdinger:quantdinger "$PROMETHEUS_MULTIPROC_DIR" 2>/dev/null || true
+fi
+
 # Runtime processes do not need root privileges. The entrypoint keeps root only
 # long enough to initialize bind-mounted secrets and volume ownership.
 if [ "$(id -u)" = "0" ] && id quantdinger >/dev/null 2>&1; then

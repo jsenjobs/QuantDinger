@@ -566,7 +566,7 @@ def _normalize_finnhub_event(row: Dict[str, Any], idx: int) -> Optional[Dict[str
     dedupe_key = f"{date_str}|{time_str}|{event_en}|{country}"
     event_id = row.get("id")
     if event_id is None:
-        event_id = int(hashlib.md5(dedupe_key.encode()).hexdigest()[:8], 16)
+        event_id = int(hashlib.md5(dedupe_key.encode(), usedforsecurity=False).hexdigest()[:8], 16)
 
     display_forecast = forecast or previous or "-"
     has_figures = any(v is not None for v in (forecast, previous, actual))
@@ -660,10 +660,13 @@ def _normalize_tradingeconomics_event(row: Dict[str, Any], idx: int) -> Optional
     dedupe_key = f"{date_str}|{time_str}|{event_en}|{country}"
     event_id = row.get("CalendarId") or row.get("calendarId") or row.get("ID") or row.get("id")
     if event_id is None:
-        event_id = int(hashlib.md5(dedupe_key.encode()).hexdigest()[:8], 16)
+        event_id = int(hashlib.md5(dedupe_key.encode(), usedforsecurity=False).hexdigest()[:8], 16)
 
     return _with_ai_insight({
-        "id": event_id if isinstance(event_id, int) else int(hashlib.md5(str(event_id).encode()).hexdigest()[:8], 16),
+        "id": event_id if isinstance(event_id, int) else int(
+            hashlib.md5(str(event_id).encode(), usedforsecurity=False).hexdigest()[:8],
+            16,
+        ),
         "name": _zh_event_name(event_en),
         "name_en": event_en,
         "country": country,
@@ -725,7 +728,7 @@ def _normalize_akshare_event(row: Dict[str, Any], idx: int) -> Optional[Dict[str
 
     dedupe_key = f"{date_str}|{time_str}|{event_name}|{country}|{idx}"
     return _with_ai_insight({
-        "id": int(hashlib.md5(dedupe_key.encode()).hexdigest()[:8], 16),
+        "id": int(hashlib.md5(dedupe_key.encode(), usedforsecurity=False).hexdigest()[:8], 16),
         "date": date_str,
         "time": time_str,
         "country": country,

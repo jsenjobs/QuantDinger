@@ -4,6 +4,11 @@ import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 
 from app.services.kline import KlineService
+from app.services.market_context import (
+    default_crypto_exchange_id,
+    normalize_exchange_id,
+    normalize_market_type,
+)
 from app.utils.cache import CacheManager
 from app.utils.logger import get_logger
 from app.utils.request_guard import RequestGuardError, cache_key, guarded_cached
@@ -15,7 +20,7 @@ _market_cache = CacheManager()
 
 QUOTE_CACHE_TTL_SEC = int(os.getenv("WATCHLIST_QUOTE_CACHE_TTL_SEC", "5"))
 QUOTE_STALE_TTL_SEC = int(os.getenv("WATCHLIST_QUOTE_STALE_TTL_SEC", "600"))
-QUOTE_FETCH_TIMEOUT_SEC = float(os.getenv("WATCHLIST_QUOTE_FETCH_TIMEOUT_SEC", "5"))
+QUOTE_FETCH_TIMEOUT_SEC = float(os.getenv("WATCHLIST_QUOTE_FETCH_TIMEOUT_SEC", "8"))
 
 
 def _executor_workers() -> int:
@@ -27,6 +32,18 @@ def _executor_workers() -> int:
 
 
 executor = ThreadPoolExecutor(max_workers=_executor_workers())
+
+
+def _quote_source_context(
+    market: str,
+    exchange_id: str = "",
+    market_type: str = "",
+) -> tuple[str, str]:
+    if str(market or "").strip() != "Crypto":
+        return "", ""
+    resolved_exchange_id = normalize_exchange_id(exchange_id) or default_crypto_exchange_id()
+    resolved_market_type = normalize_market_type(market_type, market="Crypto")
+    return resolved_exchange_id, resolved_market_type
 
 
 def quote_cache_key(
@@ -72,6 +89,8 @@ def normalize_price_payload(
     market_type: str = "",
     cached: bool = False,
     stale: bool = False,
+    source_exchange_id: str = "",
+    source_market_type: str = "",
 ) -> dict:
     out = {
         "market": market,
@@ -88,6 +107,10 @@ def normalize_price_payload(
         out["stale"] = True
     if price_data.get("source"):
         out["source"] = price_data.get("source")
+    if source_exchange_id:
+        out["source_exchange_id"] = source_exchange_id
+    if source_market_type:
+        out["source_market_type"] = source_market_type
     return out
 
 
@@ -98,8 +121,24 @@ def get_single_price(
     market_type: str = "",
 ) -> dict:
     """Get one quote snapshot with fresh and stale cache fallback."""
-    fresh_key = quote_cache_key(market, symbol, exchange_id=exchange_id, market_type=market_type)
-    stale_key = quote_cache_key(market, symbol, exchange_id=exchange_id, market_type=market_type, stale=True)
+    source_exchange_id, source_market_type = _quote_source_context(
+        market,
+        exchange_id,
+        market_type,
+    )
+    fresh_key = quote_cache_key(
+        market,
+        symbol,
+        exchange_id=source_exchange_id,
+        market_type=source_market_type,
+    )
+    stale_key = quote_cache_key(
+        market,
+        symbol,
+        exchange_id=source_exchange_id,
+        market_type=source_market_type,
+        stale=True,
+    )
     cached = _market_cache.get(fresh_key)
     if isinstance(cached, dict) and float(cached.get("price") or 0) > 0:
         return normalize_price_payload(
@@ -109,22 +148,31 @@ def get_single_price(
             exchange_id=exchange_id,
             market_type=market_type,
             cached=True,
+            source_exchange_id=source_exchange_id,
+            source_market_type=source_market_type,
         )
 
     try:
         price_data = guarded_cached(
-            cache_key("single_quote_fetch", market, exchange_id, market_type, symbol),
+            cache_key(
+                "single_quote_fetch",
+                market,
+                source_exchange_id,
+                source_market_type,
+                symbol,
+            ),
             lambda: kline_service.get_realtime_price(
                 market,
                 symbol,
-                exchange_id=exchange_id or None,
-                market_type=market_type or None,
+                exchange_id=source_exchange_id or None,
+                market_type=source_market_type or None,
             ),
             ttl_sec=QUOTE_CACHE_TTL_SEC,
             stale_ttl_sec=QUOTE_STALE_TTL_SEC,
             timeout_sec=QUOTE_FETCH_TIMEOUT_SEC,
             namespace="single_quote_fetch",
             max_concurrent=_executor_workers(),
+            cache_if=lambda value: bool(value and float(value.get("price") or 0) > 0),
         )
         if price_data and float(price_data.get("price") or 0) > 0:
             _market_cache.set(fresh_key, price_data, QUOTE_CACHE_TTL_SEC)
@@ -135,6 +183,8 @@ def get_single_price(
                 price_data,
                 exchange_id=exchange_id,
                 market_type=market_type,
+                source_exchange_id=source_exchange_id,
+                source_market_type=source_market_type,
             )
     except RequestGuardError as exc:
         logger.info("Price fetch guarded for %s:%s - %s", market, symbol, exc)
@@ -151,6 +201,8 @@ def get_single_price(
             market_type=market_type,
             cached=True,
             stale=True,
+            source_exchange_id=source_exchange_id,
+            source_market_type=source_market_type,
         )
 
     return empty_price(
@@ -201,12 +253,17 @@ def _cached_or_empty(
     market_type: str,
     error: str,
 ) -> dict:
+    source_exchange_id, source_market_type = _quote_source_context(
+        market,
+        exchange_id,
+        market_type,
+    )
     stale = _market_cache.get(
         quote_cache_key(
             market,
             symbol,
-            exchange_id=exchange_id,
-            market_type=market_type,
+            exchange_id=source_exchange_id,
+            market_type=source_market_type,
             stale=True,
         )
     )
@@ -219,6 +276,8 @@ def _cached_or_empty(
             market_type=market_type,
             cached=True,
             stale=True,
+            source_exchange_id=source_exchange_id,
+            source_market_type=source_market_type,
         )
     return empty_price(
         market,

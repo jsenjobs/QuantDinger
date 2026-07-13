@@ -14,6 +14,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+SKIP_PATHS = {
+    "backend_api_python/tests/test_market_symbol_seed_integrity.py",
+}
+
 SKIP_SUFFIXES = {
     ".gif",
     ".ico",
@@ -65,6 +69,8 @@ def tracked_files() -> list[Path]:
 
 
 def should_scan(path: Path) -> bool:
+    if path.relative_to(REPO_ROOT).as_posix() in SKIP_PATHS:
+        return False
     if path.suffix.lower() in SKIP_SUFFIXES:
         return False
     parts = set(path.relative_to(REPO_ROOT).parts)

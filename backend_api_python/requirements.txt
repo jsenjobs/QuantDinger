@@ -19,18 +19,16 @@ cryptography>=43.0.0
 # TOTP MFA and QR code generation
 pyotp>=2.9.0
 qrcode[pil]>=7.4.2
-# HD wallet derivation (xpub -> address) for USDT payments
-bip-utils>=2.9.0
 # PostgreSQL support (multi-user mode)
 psycopg2-binary>=2.9.9
+# Runtime metrics
+prometheus-client>=0.22.0,<1
 # Redis cache (optional but recommended for multi-worker setups)
 redis>=5.0.0
 # Durable background jobs and periodic maintenance
 celery[redis]>=5.5.0,<6
 # Production WSGI server
 gunicorn>=22.0.0
-# Test runner
-pytest>=8.0,<9
 # OpenAPI generation (flask-smorest)
 flask-smorest>=0.44.0,<0.48
 marshmallow>=3.24.1,<5

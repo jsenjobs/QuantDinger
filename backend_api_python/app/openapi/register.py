@@ -240,7 +240,9 @@ def enrich_spec(spec_dict: dict) -> dict:
                         },
                     }
             if "x-visibility" not in op:
-                if tag in ("Community", "Market", "Indicator", "Backtest", "Policy", "Auth", "GlobalMarket", "FastAnalysis", "Health"):
+                if path == "/metrics":
+                    op["x-visibility"] = "internal"
+                elif tag in ("Community", "Market", "Indicator", "Backtest", "Policy", "Auth", "GlobalMarket", "FastAnalysis", "Health"):
                     op["x-visibility"] = "public"
                 elif tag in ("Credentials", "QuickTrade", "Billing"):
                     op["x-visibility"] = "private"

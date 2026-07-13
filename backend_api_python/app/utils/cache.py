@@ -10,6 +10,7 @@ import json
 
 from app.utils.logger import get_logger
 from app.config import CacheConfig
+from app.config.redis_urls import cache_key, cache_redis_url
 
 logger = get_logger(__name__)
 
@@ -77,16 +78,11 @@ class CacheManager:
         # Try Redis only when enabled.
         try:
             import redis
-            from app.config import RedisConfig
-
-            self._client = redis.Redis(
-                host=RedisConfig.HOST,
-                port=RedisConfig.PORT,
-                db=RedisConfig.DB,
-                password=RedisConfig.PASSWORD,
+            self._client = redis.Redis.from_url(
+                cache_redis_url(),
                 decode_responses=True,
-                socket_connect_timeout=RedisConfig.CONNECT_TIMEOUT,
-                socket_timeout=RedisConfig.SOCKET_TIMEOUT
+                socket_connect_timeout=2,
+                socket_timeout=2,
             )
             self._client.ping()
             self._use_redis = True
@@ -100,7 +96,7 @@ class CacheManager:
     def get(self, key: str) -> Optional[Any]:
         """获取缓存"""
         try:
-            data = self._client.get(key)
+            data = self._client.get(cache_key(key))
             if data:
                 return json.loads(data)
             return None
@@ -111,14 +107,14 @@ class CacheManager:
     def set(self, key: str, value: Any, ttl: int = 300):
         """设置缓存"""
         try:
-            self._client.setex(key, ttl, json.dumps(value))
+            self._client.setex(cache_key(key), ttl, json.dumps(value))
         except Exception as e:
             logger.error(f"Cache write failed: {e}")
     
     def delete(self, key: str):
         """删除缓存"""
         try:
-            self._client.delete(key)
+            self._client.delete(cache_key(key))
         except Exception as e:
             logger.error(f"Cache delete failed: {e}")
     

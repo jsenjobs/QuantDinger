@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_smorest import Api
 
 from app._version import APP_VERSION
@@ -109,6 +109,18 @@ def init_openapi(app: Flask) -> Api:
         )
 
     api = Api(app)
+
+    @app.errorhandler(422)
+    def handle_validation_error(error):
+        details = getattr(error, "data", {}) or {}
+        messages = details.get("messages") or details.get("errors") or {}
+        return jsonify(
+            {
+                "code": 0,
+                "msg": "Invalid request data",
+                "data": {"errors": messages},
+            }
+        ), 400
 
     # Register component schemas so they appear in the exported spec even
     # before every route uses them explicitly.

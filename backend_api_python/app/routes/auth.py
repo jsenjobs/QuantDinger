@@ -7,6 +7,13 @@ Supports both multi-user (database) and single-user (legacy) modes.
 import os
 from flask import g, jsonify, redirect, request
 from app.openapi.blueprint import HumanBlueprint as Blueprint
+from app.openapi.schemas.high_risk import (
+    ChangePasswordRequestSchema,
+    LoginRequestSchema,
+    LoginResponseSchema,
+    RegisterRequestSchema,
+    ResetPasswordRequestSchema,
+)
 from app.config.settings import Config
 from app.services.auth_session import (
     build_frontend_login_redirect,
@@ -135,7 +142,9 @@ def issue_turnstile_clearance():
 # =============================================================================
 
 @auth_blp.route('/login', methods=['POST'])
-def login():
+@auth_blp.arguments(LoginRequestSchema, location="json")
+@auth_blp.response(200, LoginResponseSchema)
+def login(data):
     """
     User login endpoint.
     
@@ -154,10 +163,6 @@ def login():
     try:
         from app.services.security_service import get_security_service
         security = get_security_service()
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({'code': 400, 'msg': 'No data provided', 'data': None}), 400
         
         username = data.get('username') or data.get('account')
         password = data.get('password')
@@ -694,7 +699,9 @@ def send_verification_code():
 
 
 @auth_blp.route('/register', methods=['POST'])
-def register():
+@auth_blp.arguments(RegisterRequestSchema, location="json")
+@auth_blp.response(200, LoginResponseSchema)
+def register(data):
     """
     Register new user with email verification.
     
@@ -722,10 +729,6 @@ def register():
         email_service = get_email_service()
         user_service = get_user_service()
         billing_service = get_billing_service()
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({'code': 0, 'msg': 'No data provided', 'data': None}), 400
         
         email = (data.get('email') or '').strip().lower()
         code = data.get('code', '').strip()
@@ -879,7 +882,8 @@ def register():
 
 
 @auth_blp.route('/reset-password', methods=['POST'])
-def reset_password():
+@auth_blp.arguments(ResetPasswordRequestSchema, location="json")
+def reset_password(data):
     """
     Reset password with email verification.
     
@@ -899,10 +903,6 @@ def reset_password():
         security = get_security_service()
         email_service = get_email_service()
         user_service = get_user_service()
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({'code': 0, 'msg': 'No data provided', 'data': None}), 400
         
         email = (data.get('email') or '').strip().lower()
         code = data.get('code', '').strip()
@@ -947,7 +947,8 @@ def reset_password():
 
 @auth_blp.route('/change-password', methods=['POST'])
 @login_required
-def change_password():
+@auth_blp.arguments(ChangePasswordRequestSchema, location="json")
+def change_password(data):
     """
     Change password with email verification (for logged-in users).
     
@@ -967,10 +968,6 @@ def change_password():
         security = get_security_service()
         email_service = get_email_service()
         user_service = get_user_service()
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({'code': 0, 'msg': 'No data provided', 'data': None}), 400
         
         code = data.get('code', '').strip()
         new_password = data.get('new_password', '')

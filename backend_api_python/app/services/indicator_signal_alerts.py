@@ -599,7 +599,7 @@ class IndicatorSignalAlertService:
             str(signal.get("type")),
             str(signal.get("label")),
         ])
-        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+        return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
 
     def _build_indicator_notification(self, task: Dict[str, Any], signal: Dict[str, Any]) -> tuple[str, str, str, str, Dict[str, Any]]:
         indicator_name = str(task.get("indicator_name") or task.get("indicator_id") or "Indicator")
